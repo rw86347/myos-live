@@ -1,0 +1,6 @@
+Welcome to MyOS (live disk).
+
+The programs are Alpine Linux's (musl, i686), running unchanged on the
+MyOS kernel. You are "myos", in group wheel: use doas for root.
+Work in progress: much is still missing. Shut down with: doas poweroff
+
