@@ -12,11 +12,20 @@ export PATH
 # The kernel file systems Linux programs expect. MyOS's kernel puts /dev on
 # the root itself and has no /proc, /sys or tmpfs yet: a mount that fails is
 # skipped (then /run is a plain folder), not fatal.
+mkdir -p /proc /sys /run                # a mount needs its mount point to exist
 mountpoint -q /proc || mount -t proc -o nosuid,noexec,nodev proc /proc 2>/dev/null
 mountpoint -q /sys  || mount -t sysfs -o nosuid,noexec,nodev sys /sys 2>/dev/null
 mountpoint -q /run  || mount -t tmpfs -o mode=0755,nosuid,nodev run /run 2>/dev/null
 mkdir -p /run/runit /tmp /var/log
 chmod 1777 /tmp
+
+# The nameserver, from whoever answered DHCP. The kernel is the DHCP client,
+# so it reports what this network's resolver is as /proc/net/dns, already in
+# resolv.conf's format. A resolv.conf shipped in the image can only name
+# QEMU's 10.0.2.3, which is wrong on every real network — and a real network
+# is the reason DHCP exists. Skipped quietly if /proc didn't mount or the root
+# is read-only; then DNS falls back to whatever the image shipped.
+[ -r /proc/net/dns ] && cp /proc/net/dns /etc/resolv.conf 2>/dev/null
 
 # runit's controls: `reboot` and `poweroff` (runit-init 6 / 0) make these
 # executable and wake process 1. They live in /run (via the links in
