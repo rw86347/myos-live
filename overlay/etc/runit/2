@@ -1,0 +1,12 @@
+#!/bin/sh
+# /etc/runit/2 — runit's stage 2: run the services until shutdown.
+#
+# A service is a folder in /etc/sv with a `run` script; it is enabled by a
+# link in /var/service (= /etc/runit/runsvdir/current/):
+#     ln -s /etc/sv/xdm /var/service/        start the graphical login
+#     rm /var/service/xdm                    stop it again
+#     sv status /var/service/*               what runs
+# runsvdir starts one runsv per service, and runsv starts the service again
+# whenever it exits — that is how a login prompt comes back after logout.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+exec env - PATH=$PATH runsvdir -P /var/service 'log: ..................................................................................................................................................................................................................................................................................................................................................'

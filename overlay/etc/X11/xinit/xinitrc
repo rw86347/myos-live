@@ -1,0 +1,4 @@
+#!/bin/sh
+# xinitrc — what `startx` runs: the IceWM desktop (taskbar, Start menu,
+# windows that move with their contents, as in Windows XP).
+exec icewm-session

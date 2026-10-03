@@ -1,0 +1,3 @@
+#!/bin/sh
+# reboot: through runit (see /sbin/shutdown).
+exec /sbin/runit-init 6

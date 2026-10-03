@@ -1,0 +1,10 @@
+#!/bin/sh
+# delgroup — BusyBox's delgroup syntax on top of shadow (see adduser).
+#
+#   delgroup GROUP                   delete GROUP
+#   delgroup USER GROUP              take USER out of GROUP
+case $# in
+1) exec groupdel "$1" ;;
+2) exec gpasswd -d "$1" "$2" ;;
+*) echo "usage: delgroup [USER] GROUP" >&2; exit 1 ;;
+esac

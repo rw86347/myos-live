@@ -1,0 +1,3 @@
+#!/bin/sh
+# A login prompt on the first virtual terminal (needs /dev/tty1).
+exec agetty --noclear tty1 linux

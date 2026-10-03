@@ -1,0 +1,4 @@
+#!/bin/sh
+# The graphical login screen. Not enabled yet (it needs /dev/fb0):
+#     ln -s /etc/sv/xdm /var/service/
+exec xdm -nodaemon

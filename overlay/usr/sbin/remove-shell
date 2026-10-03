@@ -1,0 +1,6 @@
+#!/bin/sh
+# remove-shell SHELL... — take shells out of /etc/shells (see add-shell).
+for s in "$@"; do
+    grep -vxF "$s" /etc/shells > /etc/shells.new && cat /etc/shells.new > /etc/shells
+    rm -f /etc/shells.new
+done

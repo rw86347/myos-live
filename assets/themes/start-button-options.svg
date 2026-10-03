@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Start button shapes for the MyOS desktop theme: flat on the left (the
+     screen edge), tapering on the right. A, B, C are three tapers. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 330" width="960" height="330">
+  <defs>
+    <!-- glossy green: light top, a crease just under the middle, dark bottom -->
+    <linearGradient id="green" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"    stop-color="#7fe36a"/>
+      <stop offset="0.45" stop-color="#3fb447"/>
+      <stop offset="0.55" stop-color="#2c9431"/>
+      <stop offset="1"    stop-color="#1c6b21"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.05"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#173c7a"/>
+      <stop offset="1" stop-color="#1b7388"/>
+    </linearGradient>
+    <linearGradient id="barshade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"   stop-color="#ffffff" stop-opacity="0.28"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.04"/>
+      <stop offset="1"   stop-color="#000000" stop-opacity="0.18"/>
+    </linearGradient>
+    <filter id="drop" x="-10%" y="-20%" width="130%" height="150%">
+      <feDropShadow dx="2" dy="0" stdDeviation="2" flood-color="#06142c" flood-opacity="0.6"/>
+    </filter>
+    <filter id="textshadow" x="-10%" y="-20%" width="130%" height="150%">
+      <feDropShadow dx="1" dy="1.5" stdDeviation="1" flood-color="#0b3d0f" flood-opacity="0.75"/>
+    </filter>
+
+    <!-- The three shapes, 64 px tall (the taskbar's height). -->
+    <path id="shapeA" d="M0,2 H150 C196,2 230,16 252,40 C228,56 196,62 150,62 H0 Z"/>
+    <path id="shapeB" d="M0,2 H140 C200,2 250,22 300,48 C250,58 200,62 140,62 H0 Z"/>
+    <path id="shapeC" d="M0,2 H136 C150,2 158,4 170,8 L238,32 C252,37 252,62 236,62 H0 Z"/>
+
+    <clipPath id="clipA"><use href="#shapeA"/></clipPath>
+    <clipPath id="clipB"><use href="#shapeB"/></clipPath>
+    <clipPath id="clipC"><use href="#shapeC"/></clipPath>
+
+    <!-- logo (the circle with a dot from myos-logo.svg) and the word -->
+    <g id="label">
+      <circle cx="32" cy="32" r="12.5" fill="none" stroke="#ffffff" stroke-width="3.2"/>
+      <circle cx="32" cy="32" r="4.6" fill="#ffffff"/>
+      <text x="55" y="43" font-family="Trebuchet MS, Verdana, sans-serif" font-size="30"
+            font-weight="bold" font-style="italic" fill="#ffffff" filter="url(#textshadow)">Start</text>
+    </g>
+
+    <g id="taskbar">
+      <rect width="900" height="64" fill="url(#bar)"/>
+      <rect width="900" height="64" fill="url(#barshade)"/>
+      <rect width="900" height="1.5" fill="#7fb6e6" opacity="0.8"/>
+    </g>
+  </defs>
+
+  <rect width="960" height="330" fill="#eceff1"/>
+
+  <!-- A: leaf tip -->
+  <g transform="translate(30,14)">
+    <use href="#taskbar"/>
+    <g filter="url(#drop)">
+      <use href="#shapeA" fill="url(#green)" stroke="#145a19" stroke-width="1.5"/>
+    </g>
+    <rect width="300" height="30" fill="url(#shine)" clip-path="url(#clipA)"/>
+    <use href="#label"/>
+  </g>
+  <text x="30" y="96" font-family="Verdana, sans-serif" font-size="13" fill="#555">A - leaf tip</text>
+
+  <!-- B: swoosh tail -->
+  <g transform="translate(30,118)">
+    <use href="#taskbar"/>
+    <g filter="url(#drop)">
+      <use href="#shapeB" fill="url(#green)" stroke="#145a19" stroke-width="1.5"/>
+    </g>
+    <rect width="320" height="30" fill="url(#shine)" clip-path="url(#clipB)"/>
+    <use href="#label"/>
+  </g>
+  <text x="30" y="200" font-family="Verdana, sans-serif" font-size="13" fill="#555">B - swoosh tail</text>
+
+  <!-- C: ramp -->
+  <g transform="translate(30,222)">
+    <use href="#taskbar"/>
+    <g filter="url(#drop)">
+      <use href="#shapeC" fill="url(#green)" stroke="#145a19" stroke-width="1.5"/>
+    </g>
+    <rect width="300" height="30" fill="url(#shine)" clip-path="url(#clipC)"/>
+    <use href="#label"/>
+  </g>
+  <text x="30" y="304" font-family="Verdana, sans-serif" font-size="13" fill="#555">C - ramp (level bottom, sloping top)</text>
+</svg>

@@ -1,0 +1,35 @@
+#!/bin/sh
+# /etc/runit/1 — runit's stage 1: bring the machine up, once.
+#
+# Process 1 is runit (/sbin/init -> runit-init). It runs three stages, the
+# same layout as Void Linux:
+#   1  this file: kernel file systems, the first-boot install, hostname
+#   2  /etc/runit/2: supervise the services in /var/service until shutdown
+#   3  /etc/runit/3: stop the services, write everything to disk
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+# The kernel file systems Linux programs expect. MyOS's kernel puts /dev on
+# the root itself and has no /proc, /sys or tmpfs yet: a mount that fails is
+# skipped (then /run is a plain folder), not fatal.
+mountpoint -q /proc || mount -t proc -o nosuid,noexec,nodev proc /proc 2>/dev/null
+mountpoint -q /sys  || mount -t sysfs -o nosuid,noexec,nodev sys /sys 2>/dev/null
+mountpoint -q /run  || mount -t tmpfs -o mode=0755,nosuid,nodev run /run 2>/dev/null
+mkdir -p /run/runit /tmp /var/log
+chmod 1777 /tmp
+
+# runit's controls: `reboot` and `poweroff` (runit-init 6 / 0) make these
+# executable and wake process 1. They live in /run (via the links in
+# /etc/runit) so the root file system may be read-only.
+install -m 000 /dev/null /run/runit/stopit
+install -m 000 /dev/null /run/runit/reboot
+# Each service's runsv keeps its state in supervise/, a link into /run
+# for the same reason; runsv doesn't create the folder behind the link.
+for l in /etc/sv/*/supervise; do
+    [ -L "$l" ] && mkdir -p "$(readlink "$l")"
+done
+
+[ -e /etc/myos/first-boot.done ] || /etc/myos/first-boot.sh
+
+hostname -F /etc/hostname 2>/dev/null
+echo "MyOS is up."

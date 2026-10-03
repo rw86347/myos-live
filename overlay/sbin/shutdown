@@ -1,0 +1,8 @@
+#!/bin/sh
+# shutdown [-r | -h | -P] [now]: reboot or power off through runit
+# (runit-init 6 / 0 makes /etc/runit/reboot and stopit executable and wakes
+# process 1, which runs stage 3). Delays ("+5") aren't supported.
+case " $* " in
+    *" -r "*) exec /sbin/runit-init 6 ;;
+    *)        exec /sbin/runit-init 0 ;;
+esac

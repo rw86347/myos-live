@@ -1,0 +1,5 @@
+#!/bin/sh
+# Ctrl-Alt-Del: runit runs this, then stage 3 (stopit is now executable),
+# then reboots (so is reboot).
+chmod 100 /run/runit/stopit /run/runit/reboot
+echo "Ctrl-Alt-Del: rebooting..."

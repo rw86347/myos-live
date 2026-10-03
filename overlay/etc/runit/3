@@ -1,0 +1,16 @@
+#!/bin/sh
+# /etc/runit/3 — runit's stage 3: shut down. Stop the services (30 s each
+# to finish), then write everything to disk. runit then powers off, or
+# reboots if /etc/runit/reboot is executable.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+echo "Stopping services..."
+sv -w 30 force-stop /var/service/* 2>/dev/null
+sv exit /var/service/* 2>/dev/null
+
+echo "Writing everything to disk..."
+sync
+umount -a -r -t nosysfs,noproc,notmpfs 2>/dev/null
+mount -o remount,ro / 2>/dev/null
+sync

@@ -1,0 +1,3 @@
+#!/bin/sh
+# poweroff (and halt): through runit (see /sbin/shutdown).
+exec /sbin/runit-init 0

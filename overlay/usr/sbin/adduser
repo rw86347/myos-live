@@ -1,0 +1,43 @@
+#!/bin/sh
+# adduser — BusyBox's adduser syntax on top of shadow's useradd.
+#
+# Alpine's package scripts are written for BusyBox (e.g. "adduser -S -D -H
+# -h /var/empty -s /sbin/nologin -G xdm -g xdm xdm"), and the live disk has
+# no BusyBox, so this keeps `apk add` working. (Debian's adduser is the same
+# idea — a front end to useradd — with a different syntax.)
+#
+#   adduser [-h DIR] [-g GECOS] [-s SHELL] [-G GROUP] [-S] [-D] [-H]
+#           [-u UID] [-k SKEL] USER          new user
+#   adduser USER GROUP                       add USER to GROUP
+set -e
+home= gecos= shell= group= system= nohome= uid= skel=
+while getopts "h:g:s:G:SDHu:k:" o; do
+    case $o in
+    h) home=$OPTARG ;;   g) gecos=$OPTARG ;;  s) shell=$OPTARG ;;
+    G) group=$OPTARG ;;  S) system=1 ;;       D) ;;        # no password: useradd's default
+    H) nohome=1 ;;       u) uid=$OPTARG ;;    k) skel=$OPTARG ;;
+    *) echo "usage: adduser [-h DIR] [-g GECOS] [-s SHELL] [-G GROUP] [-SDH] [-u UID] USER [GROUP]" >&2
+       exit 1 ;;
+    esac
+done
+shift $((OPTIND - 1))
+[ $# -ge 1 ] || { echo "adduser: no user name" >&2; exit 1; }
+if [ $# -eq 2 ]; then
+    exec usermod -a -G "$2" "$1"
+fi
+
+user=$1
+set --
+[ -n "$system" ] && set -- "$@" -r
+[ -n "$home" ]   && set -- "$@" -d "$home"
+[ -n "$shell" ]  && set -- "$@" -s "$shell"
+[ -n "$uid" ]    && set -- "$@" -u "$uid"
+[ -n "$gecos" ]  && set -- "$@" -c "$gecos"
+if [ -n "$group" ]; then set -- "$@" -g "$group"; else set -- "$@" -U; fi
+if [ -n "$nohome" ]; then
+    set -- "$@" -M
+else
+    set -- "$@" -m
+    [ -n "$skel" ] && set -- "$@" -k "$skel"
+fi
+exec useradd "$@" "$user"

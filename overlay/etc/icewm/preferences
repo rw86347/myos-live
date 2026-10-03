@@ -1,0 +1,5 @@
+# IceWM settings for every user (a user's ~/.icewm/preferences wins).
+# Windows XP behaviour: a window's contents move and resize with it.
+# Plain X with no compositor makes that a pixel copy, cheap on old PCs.
+OpaqueMove=1
+OpaqueResize=1

@@ -1,0 +1,12 @@
+#!/bin/sh
+# deluser — BusyBox's deluser syntax on top of shadow (see adduser).
+#
+#   deluser [--remove-home] USER     delete USER
+#   deluser USER GROUP               take USER out of GROUP
+rm=
+[ "$1" = "--remove-home" ] && { rm=-r; shift; }
+case $# in
+1) exec userdel $rm "$1" ;;
+2) exec gpasswd -d "$1" "$2" ;;
+*) echo "usage: deluser [--remove-home] USER [GROUP]" >&2; exit 1 ;;
+esac

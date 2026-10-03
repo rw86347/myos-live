@@ -1,0 +1,20 @@
+#!/bin/sh
+# addgroup — BusyBox's addgroup syntax on top of shadow (see adduser).
+#
+#   addgroup [-g GID] [-S] GROUP     new group (-S: a system group)
+#   addgroup USER GROUP              add USER to GROUP
+set -e
+gid= system=
+while getopts "g:S" o; do
+    case $o in
+    g) gid=$OPTARG ;;
+    S) system=1 ;;
+    *) echo "usage: addgroup [-g GID] [-S] [USER] GROUP" >&2; exit 1 ;;
+    esac
+done
+shift $((OPTIND - 1))
+case $# in
+1) exec groupadd ${system:+-r} ${gid:+-g "$gid"} "$1" ;;
+2) exec usermod -a -G "$2" "$1" ;;
+*) echo "usage: addgroup [-g GID] [-S] [USER] GROUP" >&2; exit 1 ;;
+esac

@@ -1,0 +1,163 @@
+# packages.txt — the programs on the MyOS live disk.
+#
+# Unmodified 32-bit x86 programs from Alpine Linux 3.20 (main + community).
+# Only the top-level packages are listed: tools/fetch-live.py adds the
+# libraries each one needs (and, like apk, the "install_if" extras such as
+# man pages), and pins every exact version and SHA-256 in
+# live/packages.lock. `make live-root` builds build/live/rootfs.tar.
+#
+# A line "[name]" starts a group (the size report adds up each group).
+# A line "!name" forbids a package: the build stops if anything needs it.
+#
+# The live disk is a normal Linux userland, the way Debian, Fedora or Void
+# Linux ship one: GNU coreutils, util-linux, procps, a real init and login.
+# No BusyBox. BusyBox stays where it is good — in the kernel's test
+# initramfs (tools/fetch-alpine.sh, `make test`), where one small static
+# program gives the self-tests ~300 commands. (Alpine itself uses BusyBox
+# for all of this even on full installs; we take Alpine's packages but not
+# that choice.)
+!busybox
+
+[base]
+# Directory layout, C library, and the package manager (apk) with Alpine's
+# signing keys, so programs can be added and updated on MyOS itself.
+alpine-baselayout
+musl
+alpine-keys
+ca-certificates
+apk-tools
+tzdata
+# /bin/sh is dash (as on Debian and Ubuntu): small and fast for scripts.
+# People get bash.
+dash-binsh
+bash
+bash-completion
+# The everyday commands, from the projects that write them.
+coreutils
+findutils
+grep
+sed
+gawk
+diffutils
+patch
+less
+file
+which
+tree
+tar
+gzip
+bzip2
+xz
+unzip
+procps-ng
+psmisc
+htop
+lsof
+util-linux
+util-linux-misc
+mount
+umount
+dmesg
+ncurses
+net-tools
+iproute2
+iputils-ping
+
+[init]
+# Process 1 is runit, set up the way Void Linux does it: /etc/runit/1 boots
+# the machine, /etc/runit/2 supervises the services in /etc/sv (one small
+# "run" script each), /etc/runit/3 shuts down. agetty puts a login prompt
+# on each terminal; util-linux's login checks the password (PAM, the
+# /etc/shadow file) and starts the user's shell as that user. shadow gives
+# useradd, usermod, passwd; doas lets the wheel group act as root (57 KB,
+# sudo is 1.7 MB). xdm is the graphical login screen: small, no D-Bus.
+runit
+agetty
+util-linux-login
+shadow
+doas
+xdm
+
+[desktop]
+# X11 with IceWM, set up to look and act like Windows XP: plain X with no
+# compositor, drawing straight into the screen memory (/dev/fb0).
+xorg-server
+xf86-video-fbdev
+xf86-input-evdev
+xinit
+icewm
+xterm
+font-dejavu
+
+[office]
+# AbiWord: a small word processor that opens .doc, .docx and .rtf.
+abiword
+
+[dev]
+# Enough to build MyOS on MyOS, plus adb for Android phones and Python.
+make
+gcc
+musl-dev
+binutils
+gdb
+strace
+git
+python3
+android-tools
+nasm
+e2fsprogs
+cpio
+vim
+nano
+curl
+rsync
+openssh-client-default
+
+[docs]
+# Manual pages: man itself, the Linux programmer's manual (syscalls, libc),
+# and the manuals of the commands people type, so `man ls` works like on
+# any distribution. Not Alpine's "docs" (it adds the -doc package of every
+# library too: 113 MiB, mostly X11/TLS API references); `apk add docs`
+# brings that in if wanted.
+mandoc
+mandoc-doc
+man-pages
+apk-tools-doc
+dash-doc
+bash-doc
+coreutils-doc
+findutils-doc
+grep-doc
+sed-doc
+gawk-doc
+diffutils-doc
+patch-doc
+less-doc
+file-doc
+tar-doc
+gzip-doc
+xz-doc
+procps-ng-doc
+psmisc-doc
+htop-doc
+lsof-doc
+util-linux-doc
+util-linux-login-doc
+iproute2-doc
+runit-doc
+shadow-doc
+doas-doc
+icewm-doc
+xterm-doc
+make-doc
+gcc-doc
+binutils-doc
+gdb-doc
+strace-doc
+git-doc
+vim-doc
+nano-doc
+curl-doc
+rsync-doc
+openssh-doc
+e2fsprogs-doc

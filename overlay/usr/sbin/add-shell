@@ -1,0 +1,6 @@
+#!/bin/sh
+# add-shell SHELL... — list shells in /etc/shells (as Debian's debianutils;
+# Alpine's package scripts get it from BusyBox).
+for s in "$@"; do
+    grep -qxF "$s" /etc/shells 2>/dev/null || echo "$s" >> /etc/shells
+done

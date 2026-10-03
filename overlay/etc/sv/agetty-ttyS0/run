@@ -1,0 +1,4 @@
+#!/bin/sh
+# A login prompt on the first serial port (needs /dev/ttyS0): QEMU's
+# -serial stdio, or a null-modem cable to an old PC.
+exec agetty -L 115200 ttyS0 vt100
