@@ -11,6 +11,9 @@ Writes, next to this file:
   mockup@2x.png               the same at 2048x1536
   icon-sheet.svg / .png       every icon with its name
   ui-states.svg / .png        every element (taskbar, title bars, buttons...) in every state
+  settings.svg / .png         Settings: Users (create account, admin password)
+  settings-wifi.svg / .png    Settings: Wi-Fi (page exists; kernel does not yet)
+  settings-general.svg / .png Settings: General (categories like the Mac list)
 and rewrites the color tables in docs/ui-theme.md (between the colors:begin/end marks).
 
 Needs rsvg-convert (Homebrew: librsvg). Change colors and sizes here, then run this again.
@@ -244,6 +247,114 @@ ICONS["tray-network"] = icon_svg([], (
     '<path d="M13 22v6h22v-8" stroke-linejoin="round"/><path d="M9 40h30" stroke-linecap="round"/>'
     '<path d="M24 28v12"/></g>'))
 
+# Settings categories (sidebar icons). Drawn on the same 48x48 grid.
+WIFI_ARCS = (
+    '<g fill="none" stroke="%s" stroke-width="3.2" stroke-linecap="round">'
+    '<path d="M8 26a22 22 0 0 1 32 0"/><path d="M13 31a14 14 0 0 1 22 0"/>'
+    '<path d="M18 36a8 8 0 0 1 12 0"/></g>'
+    '<circle cx="24" cy="42" r="3" fill="%s"/>')
+ICONS["wifi"] = icon_svg([GLOBE], WIFI_ARCS % (C["globe_2"], C["globe_2"]))
+ICONS["bluetooth"] = icon_svg([STEEL], ball("s", C["steel_rim"]) + (
+    '<path d="M24 10l10 8-10 6 10 6-10 8V10m0 14l-8-6m8 6l-8 6" fill="none" stroke="#ffffff" '
+    'stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>'))
+ICONS["battery"] = icon_svg([lg("bat", [(0, C["green_1"]), (1, C["green_3"])])], (
+    '<rect x="4" y="14" width="36" height="20" rx="4" fill="%s" stroke="%s" stroke-width="1.5"/>'
+    % (C["silver_1"], C["silver_rim"]) +
+    '<rect x="7" y="17" width="24" height="14" rx="2" fill="url(#bat)"/>'
+    '<rect x="40" y="20" width="5" height="8" rx="1.5" fill="%s"/>' % C["silver_rim"]))
+ICONS["vpn"] = icon_svg([GLOBE, AMBER], globe(24, 22, 16) + (
+    '<rect x="14" y="26" width="20" height="16" rx="3" fill="url(#a)" stroke="%s" stroke-width="1.3"/>'
+    % C["amber_rim"] +
+    '<path d="M19 26v-4a5 5 0 0 1 10 0v4" fill="none" stroke="%s" stroke-width="2.4"/>' % C["amber_rim"] +
+    '<circle cx="24" cy="34" r="2.2" fill="#ffffff"/>'))
+ICONS["users"] = icon_svg([TEAL, lg("slate", [(0, C["slate_1"]), (1, C["slate_2"])])], (
+    '<circle cx="16" cy="16" r="8" fill="url(#t)" stroke="%s" stroke-width="1.3"/>' % C["teal_btn_rim"] +
+    '<path d="M4 40c0-8 5-13 12-13s12 5 12 13" fill="url(#t)" stroke="%s" stroke-width="1.3"/>'
+    % C["teal_btn_rim"] +
+    '<circle cx="32" cy="18" r="7" fill="url(#slate)" stroke="%s" stroke-width="1.3"/>' % C["slate_rim"] +
+    '<path d="M22 41c1-7 5-11 11-11s11 4 12 11" fill="url(#slate)" stroke="%s" stroke-width="1.3"/>'
+    % C["slate_rim"]))
+ICONS["lock"] = icon_svg([AMBER], (
+    '<rect x="10" y="20" width="28" height="22" rx="5" fill="url(#a)" stroke="%s" stroke-width="1.5"/>'
+    % C["amber_rim"] +
+    '<path d="M16 20v-5a8 8 0 0 1 16 0v5" fill="none" stroke="%s" stroke-width="3.2"/>' % C["amber_rim"] +
+    '<circle cx="24" cy="31" r="3" fill="#ffffff"/>'
+    '<path d="M24 34v5" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round"/>'))
+ICONS["display"] = icon_svg([DARK, GLOBE], (
+    '<rect x="3" y="6" width="42" height="28" rx="4" fill="url(#dark)" stroke="#05090c" stroke-width="1.5"/>'
+    '<rect x="6" y="9" width="36" height="22" rx="2" fill="url(#globe)"/>'
+    '<rect x="19" y="34" width="10" height="4" fill="#33454f"/>'
+    '<rect x="12" y="38" width="24" height="4" rx="2" fill="#22323b"/>'))
+ICONS["wallpaper"] = icon_svg([lg("sky", [(0, "#9fd8ff"), (1, "#f7d08a")]),
+                               lg("hill", [(0, C["green_2"]), (1, C["green_4"])])], (
+    '<rect x="4" y="8" width="40" height="32" rx="5" fill="url(#sky)" stroke="%s" stroke-width="1.4"/>'
+    % C["slate_rim"] +
+    '<circle cx="34" cy="16" r="5" fill="#ffe27a"/>'
+    '<path d="M4 30c8-8 14-4 20 0s12-6 20-2v12H4z" fill="url(#hill)"/>'))
+ICONS["keyboard"] = icon_svg([lg("silver", [(0, C["silver_1"]), (1, C["silver_2"])])], (
+    '<rect x="3" y="12" width="42" height="24" rx="5" fill="url(#silver)" stroke="%s" stroke-width="1.5"/>'
+    % C["silver_rim"] +
+    "".join('<rect x="%d" y="%d" width="5" height="5" rx="1" fill="#ffffff" stroke="%s"/>'
+            % (7 + 7 * (k % 5), 16 + 7 * (k // 5), C["silver_rim"]) for k in range(10)) +
+    '<rect x="10" y="30" width="28" height="4" rx="1" fill="#ffffff" stroke="%s"/>' % C["silver_rim"]))
+ICONS["mouse"] = icon_svg([lg("silver", [(0, C["silver_1"]), (1, C["silver_2"])])], (
+    '<rect x="12" y="6" width="24" height="36" rx="12" fill="url(#silver)" stroke="%s" stroke-width="1.5"/>'
+    % C["silver_rim"] +
+    '<path d="M24 6v14" stroke="%s" stroke-width="1.5"/><path d="M12 20h24" stroke="%s" stroke-width="1.5"/>'
+    % (C["silver_rim"], C["silver_rim"]) +
+    '<rect x="21" y="10" width="6" height="8" rx="3" fill="%s"/>' % C["teal_btn_bottom"]))
+ICONS["printer"] = icon_svg([lg("silver", [(0, C["silver_1"]), (1, C["silver_2"])]), PAPER], (
+    '<rect x="10" y="4" width="28" height="12" rx="2" fill="url(#paper)" stroke="%s" stroke-width="1.2"/>'
+    % C["paper_rim"] +
+    '<rect x="5" y="14" width="38" height="20" rx="4" fill="url(#silver)" stroke="%s" stroke-width="1.5"/>'
+    % C["silver_rim"] +
+    '<rect x="12" y="28" width="24" height="14" rx="2" fill="url(#paper)" stroke="%s" stroke-width="1.2"/>'
+    % C["paper_rim"] +
+    '<circle cx="34" cy="22" r="2" fill="%s"/>' % C["green_3"]))
+ICONS["privacy"] = icon_svg([TEAL], (
+    '<path d="M24 4l16 7v12c0 12-8 18-16 21C16 41 8 35 8 23V11z" fill="url(#t)" stroke="%s" stroke-width="1.5"/>'
+    % C["teal_btn_rim"] +
+    '<path d="M16 24l5 5 11-12" fill="none" stroke="#ffffff" stroke-width="3.2" '
+    'stroke-linecap="round" stroke-linejoin="round"/>'))
+ICONS["accessibility"] = icon_svg([TEAL], (
+    '<circle cx="24" cy="24" r="20" fill="url(#t)" stroke="%s" stroke-width="1.6"/>' % C["teal_btn_rim"] +
+    '<circle cx="24" cy="13" r="4" fill="#ffffff"/>'
+    '<path d="M14 20h20M18 20l-2 18m16-18l2 18M16 30h16" fill="none" stroke="#ffffff" '
+    'stroke-width="3" stroke-linecap="round"/>'))
+ICONS["appearance"] = icon_svg([TEAL, AMBER, GREEN], (
+    '<circle cx="18" cy="18" r="11" fill="url(#t)" stroke="%s" stroke-width="1.3"/>' % C["teal_btn_rim"] +
+    '<circle cx="32" cy="18" r="11" fill="url(#a)" stroke="%s" stroke-width="1.3"/>' % C["amber_rim"] +
+    '<circle cx="24" cy="31" r="11" fill="url(#g)" stroke="%s" stroke-width="1.3"/>' % C["green_rim"]))
+ICONS["updates"] = icon_svg([GREEN], ball("g", C["green_rim"]) + (
+    '<path d="M16 20a9 9 0 0 1 16 3M32 28a9 9 0 0 1-16-3" fill="none" stroke="#ffffff" '
+    'stroke-width="3" stroke-linecap="round"/>'
+    '<path d="M30 14l4 9h-8zM18 34l-4-9h8z" fill="#ffffff"/>'))
+ICONS["about"] = icon_svg([TEAL], ball("t", C["teal_btn_rim"]) + (
+    '<circle cx="24" cy="16" r="3" fill="#ffffff"/>'
+    '<path d="M24 23v12" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>'))
+ICONS["notifications"] = icon_svg([AMBER], (
+    '<path d="M12 20a12 12 0 0 1 24 0c0 10 3 12 3 12H9s3-2 3-12z" fill="url(#a)" stroke="%s" stroke-width="1.5"/>'
+    % C["amber_rim"] +
+    '<path d="M20 36a4 4 0 0 0 8 0" fill="none" stroke="%s" stroke-width="2.4"/>' % C["amber_rim"]))
+ICONS["password"] = icon_svg([AMBER], (
+    '<circle cx="16" cy="24" r="10" fill="url(#a)" stroke="%s" stroke-width="1.6"/>' % C["amber_rim"] +
+    '<circle cx="16" cy="24" r="3.5" fill="#ffffff"/>'
+    '<path d="M24 24h16l-4 4 4 4" fill="none" stroke="%s" stroke-width="3.2" '
+    'stroke-linecap="round" stroke-linejoin="round"/>' % C["amber_rim"]))
+ICONS["desktop"] = icon_svg([TEAL, lg("barh", [(0, C["bar_left"]), (1, C["bar_right"])], x2=1, y2=0)], (
+    '<rect x="4" y="6" width="40" height="30" rx="4" fill="url(#t)" stroke="%s" stroke-width="1.4"/>'
+    % C["teal_btn_rim"] +
+    '<rect x="7" y="12" width="20" height="14" rx="2" fill="%s"/>' % C["panel_white"] +
+    '<rect x="24" y="16" width="16" height="12" rx="2" fill="%s"/>' % C["panel_sand"] +
+    '<rect x="4" y="36" width="40" height="6" rx="2" fill="url(#barh)"/>'
+    '<path d="M4 36h10c4 0 6 3 10 3" fill="%s"/>' % C["green_3"]))
+ICONS["sound"] = icon_svg([STEEL], (
+    '<path d="M7 18h7l9-8v28l-9-8H7z" fill="url(#s)" stroke="%s" stroke-width="1.3"/>' % C["steel_rim"] +
+    '<g fill="none" stroke="%s" stroke-width="3" stroke-linecap="round">'
+    '<path d="M29 17a9 9 0 0 1 0 14"/><path d="M34 12a16 16 0 0 1 0 24"/></g>' % C["steel_rim"]))
+ICONS["datetime"] = icon_svg([STEEL], ball("s", C["steel_rim"]) + (
+    '<path d="M24 14v11l7 5" fill="none" stroke="#ffffff" stroke-width="3.2" stroke-linecap="round"/>'))
+
 # --- every element and its states ----------------------------------------------------
 # One table drives the mockup, the states sheet (ui-states.png) and the color tables
 # in docs/ui-theme.md. A fill is either one hex color (flat) or a gradient G().
@@ -358,6 +469,35 @@ UI = [
         ("normal", dict(w=170, fill="#fff7dd", border="#c9a24a", rx=3, text=C["text"],
                         note="11 px Verdana; shadow 0/2 px, blur 2, black 25%")),
     ]),
+    ("Hot corner", "the top-right corner of the desktop: the wallpaper curls over; move the mouse "
+                   "into the corner to see all windows (like Mission Control on the Mac)", "", [
+        ("normal", dict(kind="curl", size=24, fill=G("v", (0, C["title_bottom"]), (1, C["bar_left"])),
+                        flap=G("v", (0, "#fffaf0"), (1, "#d8c7a4")), border="#b9a37a",
+                        note="fill is what shows under the curl; the flap is the back of the wallpaper, "
+                             "lit along the fold, `#b9a37a` edge, shadow -1/1.5 px, blur 1.5, black 35%")),
+        ("hover", dict(kind="curl", size=40, fill=G("v", (0, C["title_mid"]), (1, C["bar_left"])),
+                       flap=G("v", (0, "#ffffff"), (1, "#e3d3b0")), border="#b9a37a",
+                       note="the mouse is in the corner: the curl grows to 40 px in 120 ms, then the "
+                            "windows spread out")),
+    ]),
+    ("Login background", "the middle of the login screen", "", [
+        ("normal", dict(fill=G("v", (0, "#0e2c52", 0.55), (0.5, "#0f5560", 0.35), (1, "#0e2c52", 0.70)),
+                        on_dark=True, note="drawn over the wallpaper, which is blurred (Gaussian, 6 px)")),
+    ]),
+    ("Login bands", "the bands at the top (64 px) and bottom (80 px) of the login screen", "", [
+        ("normal", dict(rx=0, fill=G("v", (0, "#0e2c52"), (1, "#133f63")), glow=True,
+                        note="the bottom band runs the other way; a 2 px golden line where each band meets "
+                             "the middle, left to right: clear → `#ffc56b` → clear")),
+    ]),
+    ("User tile", "one per user on the login screen; 380x84 px, 10 px corners", "rodger", [
+        ("normal", dict(fill="none", rx=10, text="#ffffff", on_dark=True, note="the picture at 85%")),
+        ("hover", dict(fill=G("h", (0, "#ffffff", 0.16), (1, "#ffffff", 0.03)), border=C["bar_edge"], rx=10,
+                       text="#ffffff", on_dark=True)),
+        ("selected", dict(fill=G("h", (0, "#ffffff", 0.28), (1, "#ffffff", 0.06)), border=C["amber_top"], bw=1.5,
+                          rx=10, text="#ffffff", bold=True, on_dark=True,
+                          note="the golden border is the theme's name; shows the password box (a focused "
+                               "text box) and the green go button")),
+    ]),
 ]
 
 
@@ -400,6 +540,8 @@ def draw_bar(st, x, y, w, h, label=None, size=12):
                  % (x + 2, y + 1, w - 4, h * 0.42, st.get("rx", 4), st["shine"]))
     if st.get("inset"):
         o.append('<rect x="%s" y="%s" width="%s" height="3" rx="2" fill="#000000" opacity="0.3"/>' % (x + 1, y + 1, w - 2))
+    if st.get("glow"):
+        o.append('<rect x="%s" y="%s" width="%s" height="2" fill="url(#goldline)"/>' % (x, y + h - 2, w))
     if st.get("top"):
         o.append('<rect x="%s" y="%s" width="%s" height="1.5" fill="%s" opacity="0.8"/>' % (x, y, w, st["top"]))
     if st.get("left"):
@@ -469,11 +611,17 @@ def img(name, x, y, size, opacity=1):
 
 
 def text(x, y, s, size=12, color=None, weight="normal", font=FONT_UI, anchor="start", extra=""):
+    s = s.replace("&", "&amp;").replace("<", "&lt;")
     return ('<text x="%s" y="%s" font-family="%s" font-size="%s" font-weight="%s" fill="%s" '
             'text-anchor="%s" %s>%s</text>' % (x, y, font, size, weight, color or C["text"], anchor, extra, s))
 
 
 COMMON_DEFS = (SHINE + START_DEFS +
+               '<filter id="curlshadow" x="-30%" y="-30%" width="160%" height="160%">'
+               '<feDropShadow dx="-1" dy="1.5" stdDeviation="1.5" flood-color="#000" flood-opacity="0.35"/></filter>' +
+               '<linearGradient id="goldline" x1="0" y1="0" x2="1" y2="0">'
+               '<stop offset="0" stop-color="#ffc56b" stop-opacity="0"/><stop offset="0.5" stop-color="#ffc56b"/>'
+               '<stop offset="1" stop-color="#ffc56b" stop-opacity="0"/></linearGradient>' +
                '<filter id="labelshadow" x="-20%" y="-20%" width="140%" height="160%">'
                '<feDropShadow dx="1" dy="1" stdDeviation="0.8" flood-color="#000" flood-opacity="0.8"/></filter>' +
                "".join('<filter id="shadow-%s" x="-5%%" y="-5%%" width="115%%" height="115%%">'
@@ -500,6 +648,22 @@ def title_bar(st, x, y, w, title, icon, buttons=True):
     return "".join(o)
 
 
+def curl(st, x, y):
+    """The page curl whose top-right corner is at (x, y). The flap is the cut-off
+    corner folded back over the line from (x-s, y) to (x, y+s), with a rounded tip."""
+    s = st["size"]
+    under, d1 = grad(st["fill"])
+    flap, d2 = grad(st["flap"])
+    return (d1 + d2 +
+            '<path d="M%s %s H%s V%s Z" fill="%s"/>' % (x - s, y, x, y + s, under) +
+            '<g filter="url(#curlshadow)"><path d="M%s %s L%s %s Q%s %s %s %s Q%s %s %s %s Z" fill="%s" '
+            'stroke="%s" stroke-width="0.8"/></g>'
+            % (x - s, y, x, y + s, x - s * 0.62, y + s * 1.02, x - s * 0.9, y + s * 0.9,
+               x - s * 1.02, y + s * 0.62, x - s, y, flap, st["border"]) +
+            '<path d="M%s %s L%s %s" stroke="#ffffff" stroke-opacity="0.7" stroke-width="1"/>'
+            % (x - s + 1, y + 0.5, x - 0.5, y + s - 1))
+
+
 def window(x, y, w, h, title, icon, state):
     st = S("Window title bar", state)
     return ('<g filter="url(#shadow-%s)"><rect x="%s" y="%s" width="%s" height="%s" rx="8" fill="%s" '
@@ -520,6 +684,7 @@ def mockup():
         y = 18 + k * 82
         o.append(img(name, 26, y, 48))
         o.append(text(50, y + 64, label, 12, "#ffffff", anchor="middle", extra='filter="url(#labelshadow)"'))
+    o.append(curl(S("Hot corner", "normal"), W, 0))
 
     # a window without the focus: Terminal
     tx, ty, tw, th = 470, 470, 470, 236
@@ -581,6 +746,10 @@ def mockup():
              % (wx + 1, wy + wh - 23, ww - 2, ww - 16, C["menu_bar"]))
     o.append('<path d="M%d %dh%d" stroke="%s"/>' % (wx + 1, wy + wh - 24, ww - 2, C["border"]))
     o.append(text(wx + 10, wy + wh - 8, "6 objects, 289 KB", 11, C["text_soft"]))
+    # Two strokes in the corner: the place you drag to resize the window.
+    o.append('<g stroke="#8a8478" stroke-width="1.25" stroke-linecap="round">'
+             '<path d="M%d %dl-8-8"/><path d="M%d %dl-8-8"/></g>'
+             % (wx + ww - 8, wy + wh - 6, wx + ww - 12, wy + wh - 6))
 
     # the start menu (open, so the Start button is drawn pressed)
     mw, mh = 390, 430
@@ -641,6 +810,253 @@ def mockup():
     return "".join(o)
 
 
+# --- the login screen ------------------------------------------------------------------
+def user_picture(kind, x, y, size, opacity=1, tag=None):
+    """rodger's picture is a piece of the wallpaper; guest gets a plain silhouette."""
+    tag = tag or kind
+    o = ['<g opacity="%s"><clipPath id="pic-%s"><rect x="%s" y="%s" width="%s" height="%s" rx="8"/></clipPath>'
+         % (opacity, tag, x, y, size, size)]
+    if kind == "rodger":
+        o.append('<image href="wallpaper.jpg" x="%s" y="%s" width="%s" height="%s" preserveAspectRatio="xMidYMid slice" '
+                 'clip-path="url(#pic-%s)"/>' % (x - size * 1.6, y - size * 1.5, size * 4.2, size * 3.15, tag))
+    else:
+        fill, d = grad(G("v", (0, C["teal_btn_bottom"]), (1, C["title_bottom"])))
+        o.append(d + '<rect x="%s" y="%s" width="%s" height="%s" rx="8" fill="%s"/>' % (x, y, size, size, fill))
+        s = size / 64
+        o.append('<g transform="translate(%s,%s) scale(%s)" fill="#ffffff" opacity="0.9">'
+                 '<circle cx="32" cy="24" r="11"/><path d="M12 61c0-13 9-21 20-21s20 8 20 21z"/></g>'
+                 % (x, y, s))
+    o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="8" fill="none" stroke="#ffffff" stroke-width="2"/></g>'
+             % (x, y, size, size))
+    return "".join(o)
+
+
+def login():
+    o = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d"><defs>%s'
+         '<filter id="blur" x="-5%%" y="-5%%" width="110%%" height="110%%"><feGaussianBlur stdDeviation="6"/></filter>'
+         '<linearGradient id="divider" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0"/>'
+         '<stop offset="0.5" stop-color="#ffffff" stop-opacity="0.6"/><stop offset="1" stop-color="#ffffff" '
+         'stop-opacity="0"/></linearGradient></defs>' % (W, H, W, H, COMMON_DEFS)]
+    o.append('<image href="wallpaper.jpg" x="-20" y="-20" width="%d" height="%d" preserveAspectRatio="xMidYMid slice" '
+             'filter="url(#blur)"/>' % (W + 40, H + 40))
+    o.append(draw_bar(S("Login background", "normal"), 0, 0, W, H))
+
+    # top and bottom bands
+    band = S("Login bands", "normal")
+    o.append(draw_bar(band, 0, 0, W, 64))
+    o.append('<g transform="translate(0,%d) scale(1,-1)">%s</g>' % (H, draw_bar(band, 0, 0, W, 80)))
+    o.append(text(W - 32, 40, "Welcome", 22, "#ffffff", "bold", FONT_TITLE, anchor="end",
+                  extra='font-style="italic" opacity="0.9"'))
+
+    # left: the logo and the hint
+    o.append(img("logo", 362, 262, 108))
+    o.append(text(470, 410, "MyOS", 54, "#ffffff", "bold", FONT_TITLE, anchor="end",
+                  extra='font-style="italic" filter="url(#labelshadow)"'))
+    o.append(text(470, 446, "To begin, click your user name", 15, C["teal_btn_top"], anchor="end"))
+    o.append('<rect x="511" y="170" width="1.5" height="430" fill="url(#divider)"/>')
+
+    # right: the users; rodger is selected
+    tx = 548
+    sel = S("User tile", "selected")
+    o.append(draw_bar(sel, tx, 262, 400, 120))
+    o.append(user_picture("rodger", tx + 14, 276, 72))
+    o.append(text(tx + 102, 306, "rodger", 22, "#ffffff", "bold", FONT_TITLE, extra='filter="url(#labelshadow)"'))
+    o.append(text(tx + 102, 328, "Type your password", 12, C["teal_btn_top"]))
+    o.append(draw_bar(S("Text box", "focused"), tx + 102, 340, 220, 26))
+    o.append(text(tx + 112, 359, "\u2022" * 8, 14, C["text"], extra='letter-spacing="2"'))
+    o.append('<rect x="%s" y="345" width="1.5" height="16" fill="%s"/>' % (tx + 192, C["text"]))
+    o.append(img("all-programs", tx + 332, 338, 30))
+    o.append(user_picture("guest", tx + 14, 410, 56, 0.85))
+    o.append(text(tx + 86, 438, "guest", 20, "#ffffff", font=FONT_TITLE, extra='opacity="0.85"'))
+    o.append(text(tx + 86, 456, "No password", 12, C["teal_btn_top"], extra='opacity="0.85"'))
+
+    # bottom band: Turn off on the left, a note on the right
+    o.append(img("turn-off", 30, H - 58, 36))
+    o.append(text(76, H - 34, "Turn off MyOS", 15, "#ffffff", extra='filter="url(#labelshadow)"'))
+    o.append(text(W - 32, H - 44, "After you log on, you can add or change users.", 12, C["teal_btn_top"], anchor="end"))
+    o.append(text(W - 32, H - 26, "Go to Settings and click Users.", 12, C["teal_btn_top"], anchor="end"))
+    o.append("</svg>\n")
+    return "".join(o)
+
+
+# --- Settings: categories follow macOS System Settings, minus Apple-only items ----
+# Wi-Fi sits in the same place as on the Mac: after Software Update, before Bluetooth.
+SETTINGS_SIDEBAR = [
+    ("updates", "Software Update"),
+    None,
+    ("wifi", "Wi-Fi"),
+    ("bluetooth", "Bluetooth"),
+    ("network", "Network"),
+    ("vpn", "VPN"),
+    ("battery", "Battery"),
+    None,
+    ("settings", "General"),
+    ("accessibility", "Accessibility"),
+    ("appearance", "Appearance"),
+    ("desktop", "Desktop & Taskbar"),
+    ("display", "Displays"),
+    ("wallpaper", "Wallpaper"),
+    ("notifications", "Notifications"),
+    ("sound", "Sound"),
+    ("lock", "Lock Screen"),
+    ("privacy", "Privacy & Security"),
+    ("password", "Password"),
+    ("users", "Users"),
+    None,
+    ("keyboard", "Keyboard"),
+    ("mouse", "Mouse"),
+    ("printer", "Printers"),
+]
+
+SETTINGS_GENERAL = [
+    ("about", "About"),
+    ("updates", "Software Update"),
+    ("disks", "Storage"),
+    ("datetime", "Date & Time"),
+    ("web-browser", "Language"),
+    ("network", "Sharing"),
+    ("disks", "Startup Disk"),
+    ("recycle", "Transfer or Reset"),
+]
+
+
+def settings_chrome():
+    """Wallpaper, curl, and the taskbar with Settings as the focused task."""
+    o = ['<image href="wallpaper.jpg" width="%d" height="%d" preserveAspectRatio="xMidYMid slice"/>' % (W, H),
+         curl(S("Hot corner", "normal"), W, 0)]
+    o.append(draw_bar(S("Taskbar", "normal"), 0, H - BAR_H, W, BAR_H))
+    for k, (name, label, state) in enumerate([("settings", "Settings", "active"), ("folder", "My Files", "normal")]):
+        x = 176 + k * 170
+        st = S("Task button", state)
+        o.append(draw_bar(st, x, H - BAR_H + 5, 160, 30))
+        o.append(img(name, x + 8, H - BAR_H + 11, 18))
+        o.append(text(x + 32, H - BAR_H + 25, label, 12, st["text"], "bold" if st.get("bold") else "normal"))
+    trx = W - 150
+    o.append(draw_bar(S("Tray", "normal"), trx, H - BAR_H, 150, BAR_H))
+    o.append(img("tray-network", trx + 12, H - BAR_H + 11, 18))
+    o.append(img("tray-volume", trx + 38, H - BAR_H + 11, 18))
+    o.append(text(trx + 104, H - BAR_H + 25, "8:11 PM", 12, "#ffffff", anchor="middle"))
+    o.append('<g transform="translate(0,%d) scale(%s)">%s</g>' % (H - BAR_H, BAR_H / START_H, start_button("normal")))
+    return "".join(o)
+
+
+def settings_sidebar(wx, wy, sw, sh, selected):
+    o = ['<rect x="%d" y="%d" width="%d" height="%d" fill="url(#sand)"/>' % (wx, wy, sw, sh)]
+    o.append(draw_bar(S("Text box", "normal"), wx + 10, wy + 10, sw - 20, 22))
+    o.append(text(wx + 18, wy + 26, "Search", 11, C["text_soft"]))
+    o.append(user_picture("rodger", wx + 10, wy + 42, 28, tag="sb-rodger"))
+    o.append(text(wx + 46, wy + 54, "rodger", 12, weight="bold"))
+    o.append(text(wx + 46, wy + 68, "Administrator", 10, C["text_soft"]))
+    y, hl = wy + 80, S("Menu highlight", "hover")
+    for item in SETTINGS_SIDEBAR:
+        if item is None:
+            o.append('<path d="M%s %sh%s" stroke="%s"/>' % (wx + 12, y + 4, sw - 24, C["border"]))
+            y += 10
+            continue
+        icon, label = item
+        if icon == selected:
+            o.append(draw_bar(hl, wx + 6, y, sw - 12, 22))
+        o.append(img(icon, wx + 12, y + 3, 16))
+        o.append(text(wx + 34, y + 16, label, 11, hl["text"] if icon == selected else C["text"]))
+        y += 22
+    return "".join(o)
+
+
+def settings_row(x, y, w, icon, label, extra=""):
+    o = ['<rect x="%s" y="%s" width="%s" height="36" rx="6" fill="#ffffff" fill-opacity="0.7" stroke="%s"/>'
+         % (x, y, w, C["border"])]
+    o.append(img(icon, x + 10, y + 6, 24))
+    o.append(text(x + 44, y + 23, label, 13))
+    if extra:
+        o.append(text(x + w - 28, y + 23, extra, 12, C["text_soft"], anchor="end"))
+    o.append(img("forward", x + w - 28, y + 8, 20))
+    return "".join(o)
+
+
+def settings_pane_general(px, py, pw):
+    o = [img("settings", px, py, 48),
+         text(px + 58, py + 22, "General", 22, weight="bold", font=FONT_TITLE),
+         text(px + 58, py + 42, "About this computer, storage, date and language.", 12, C["text_soft"])]
+    for k, (icon, label) in enumerate(SETTINGS_GENERAL):
+        o.append(settings_row(px, py + 60 + k * 42, pw, icon, label))
+    return "".join(o)
+
+
+def settings_pane_wifi(px, py, pw):
+    o = [img("wifi", px, py, 48),
+         text(px + 58, py + 22, "Wi-Fi", 22, weight="bold", font=FONT_TITLE),
+         text(px + 58, py + 42, "Join a wireless network.", 12, C["text_soft"])]
+    o.append('<rect x="%s" y="%s" width="%s" height="56" rx="8" fill="#ffffff" fill-opacity="0.7" stroke="%s"/>'
+             % (px, py + 58, pw, C["border"]))
+    o.append(text(px + 16, py + 82, "Wi-Fi", 13, weight="bold"))
+    o.append(text(px + 16, py + 100, "Off", 11, C["text_soft"]))
+    o.append('<rect x="%s" y="%s" width="44" height="24" rx="12" fill="%s"/>' % (px + pw - 60, py + 74, C["border"]))
+    o.append('<circle cx="%s" cy="%s" r="10" fill="#ffffff"/>' % (px + pw - 50, py + 86))
+    o.append('<rect x="%s" y="%s" width="%s" height="200" rx="8" fill="#ffffff" fill-opacity="0.55" stroke="%s"/>'
+             % (px, py + 128, pw, C["border"]))
+    o.append(text(px + pw / 2, py + 200, "Wi-Fi is not available yet.", 13, C["text"], "bold", anchor="middle"))
+    o.append(text(px + pw / 2, py + 222, "The kernel does not support it. This page will list", 12, C["text_soft"],
+                  anchor="middle"))
+    o.append(text(px + pw / 2, py + 240, "nearby networks when it does.", 12, C["text_soft"], anchor="middle"))
+    return "".join(o)
+
+
+def settings_pane_users(px, py, pw, dialog=True):
+    o = [img("users", px, py, 48),
+         text(px + 58, py + 22, "Users", 22, weight="bold", font=FONT_TITLE),
+         text(px + 58, py + 42, "Manage who can use this computer.", 12, C["text_soft"])]
+    for k, (kind, name, role, note, tag) in enumerate([
+            ("rodger", "rodger", "Administrator", "Current user", "pane-rodger"),
+            ("guest", "guest", "Standard", "No password", "pane-guest")]):
+        y = py + 62 + k * 72
+        o.append('<rect x="%s" y="%s" width="%s" height="64" rx="8" fill="#ffffff" fill-opacity="0.7" stroke="%s"/>'
+                 % (px, y, pw, C["border"]))
+        o.append(user_picture(kind, px + 12, y + 8, 48, tag=tag))
+        o.append(text(px + 74, y + 28, name, 15, weight="bold", font=FONT_TITLE))
+        o.append(text(px + 74, y + 48, "%s  ·  %s" % (role, note), 12, C["text_soft"]))
+        o.append(img("forward", px + pw - 32, y + 22, 20))
+    o.append(draw_bar(S("Push button", "default"), px, py + 214, 160, 26, "Create New User..."))
+    o.append(text(px + 172, py + 232, "Requires the administrator password.", 11, C["text_soft"]))
+    if dialog:
+        dw, dh, dx, dy = 340, 196, px + 40, py + 250
+        o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="#000000" opacity="0.18"/>'
+                 % (px - 16, py - 16, pw + 32, 560))
+        o.append(window(dx, dy, dw, dh, "Create New User", "users", "active"))
+        o.append(img("lock", dx + 16, dy + 44, 36))
+        o.append(text(dx + 62, dy + 58, "Administrator password required", 13, weight="bold"))
+        o.append(text(dx + 62, dy + 76, "Type the password for rodger to add", 11, C["text_soft"]))
+        o.append(text(dx + 62, dy + 92, "a user account to this computer.", 11, C["text_soft"]))
+        o.append(text(dx + 20, dy + 128, "Password:", 12))
+        o.append(draw_bar(S("Text box", "focused"), dx + 100, dy + 110, 220, 26))
+        o.append(text(dx + 110, dy + 129, "\u2022" * 8, 14, C["text"], extra='letter-spacing="2"'))
+        o.append('<rect x="%s" y="%s" width="1.5" height="16" fill="%s"/>' % (dx + 190, dy + 115, C["text"]))
+        o.append(draw_bar(S("Push button", "normal"), dx + 148, dy + 154, 80, 24, "Cancel"))
+        o.append(draw_bar(S("Push button", "default"), dx + 240, dy + 154, 80, 24, "Continue"))
+    return "".join(o)
+
+
+def settings(page="users"):
+    """A 1024x768 desktop with Settings open on `page` (wifi, users, or general)."""
+    o = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d"><defs>%s'
+         '<linearGradient id="sand" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="%s"/>'
+         '<stop offset="1" stop-color="%s"/></linearGradient></defs>'
+         % (W, H, W, H, COMMON_DEFS, C["panel_sand"], C["panel_sand_deep"])]
+    o.append(settings_chrome())
+    wx, wy, ww, wh, sw = 18, 14, 988, 706, 220
+    o.append(window(wx, wy, ww, wh, "Settings", "settings", "active"))
+    o.append(settings_sidebar(wx + 1, wy + 30, sw, wh - 31, page))
+    o.append('<path d="M%s %sV%s" stroke="%s"/>' % (wx + 1 + sw, wy + 30, wy + wh - 1, C["border"]))
+    px, py, pw = wx + sw + 24, wy + 48, ww - sw - 48
+    if page == "wifi":
+        o.append(settings_pane_wifi(px, py, pw))
+    elif page == "general":
+        o.append(settings_pane_general(px, py, pw))
+    else:
+        o.append(settings_pane_users(px, py, pw))
+    o.append("</svg>\n")
+    return "".join(o)
+
+
 # --- the icon sheet ---------------------------------------------------------------------
 ON_DARK = {"logo", "tray-volume", "tray-network"}     # white icons: shown on the taskbar color
 
@@ -677,6 +1093,8 @@ def states_sheet():
         for k, (state, st) in enumerate(states):
             x = x0 + k * colw
             kind = st.get("kind", "bar")
+            if st.get("on_dark"):
+                o.append('<rect x="%s" y="%s" width="170" height="44" rx="6" fill="%s"/>' % (x - 5, y + 1, C["bar_left"]))
             if kind == "bar":
                 bw = st.get("w", 150)
                 o.append(draw_bar(st, x + (160 - bw) / 2, y + 8, bw, 30, label))
@@ -684,6 +1102,10 @@ def states_sheet():
                 o.append(draw_ball(st, st["glyph"], x + 66, y + 7, 30))
             elif kind == "start":
                 o.append('<g transform="translate(%s,%s) scale(0.625)">%s</g>' % (x + 2, y + 3, start_button(state)))
+            elif kind == "curl":
+                o.append('<svg x="%s" y="%s" width="70" height="44" viewBox="%d 0 70 44">'
+                         '<image href="wallpaper.jpg" width="1152" height="864"/></svg>' % (x + 45, y + 4, 1040 - 70))
+                o.append(curl(st, x + 115, y + 4))
             elif kind == "title":
                 o.append('<rect x="%s" y="%s" width="170" height="8" fill="%s" stroke="%s"/>'
                          % (x - 4, y + 30, C["panel_white"], st["frame"]))
@@ -695,6 +1117,8 @@ def states_sheet():
 
 # --- the color tables in docs/ui-theme.md -------------------------------------------------
 def describe(fill):
+    if fill == "none":
+        return "none (clear)"
     if isinstance(fill, str):
         return "`%s` flat" % fill
     stops = fill["stops"]
@@ -774,6 +1198,14 @@ def main():
               % (START_W, START_H, START_W, START_H, COMMON_DEFS, start_button(state)), zoom=2)
     write("mockup", mockup())
     render("mockup.svg", "mockup@2x.png", zoom=2)
+    write("login", login())
+    render("login.svg", "login@2x.png", zoom=2)
+    write("settings", settings("users"))
+    render("settings.svg", "settings@2x.png", zoom=2)
+    write("settings-wifi", settings("wifi"))
+    render("settings-wifi.svg", "settings-wifi@2x.png", zoom=2)
+    write("settings-general", settings("general"))
+    render("settings-general.svg", "settings-general@2x.png", zoom=2)
     write("icon-sheet", sheet())
     write("ui-states", states_sheet())
     update_doc()

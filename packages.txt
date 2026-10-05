@@ -70,13 +70,13 @@ iputils-ping
 # on each terminal; util-linux's login checks the password (PAM, the
 # /etc/shadow file) and starts the user's shell as that user. shadow gives
 # useradd, usermod, passwd; doas lets the wheel group act as root (57 KB,
-# sudo is 1.7 MB). xdm is the graphical login screen: small, no D-Bus.
+# sudo is 1.7 MB). The graphical login screen is MyOS's own (myos-login,
+# live/myos-login/), built from the [dev] group's headers.
 runit
 agetty
 util-linux-login
 shadow
 doas
-xdm
 
 [desktop]
 # X11 with IceWM, set up to look and act like Windows XP: plain X with no
@@ -88,10 +88,51 @@ xinit
 icewm
 xterm
 font-dejavu
+# GTK's own icons (file dialogs, AbiWord's and Geany's toolbars).
+adwaita-icon-theme
+
+[compositor]
+# picom keeps a picture of every window and builds the screen from them:
+# real shadows, fades, an animated window overview. On the live disk always;
+# the installer copies it only to machines fast enough for it, and the X
+# session starts it only when /etc/myos/desktop.conf says so. Requirements
+# and the check: docs/DESIGN.md, "the compositor is optional".
+picom
 
 [office]
 # AbiWord: a small word processor that opens .doc, .docx and .rtf.
 abiword
+# WritePerfect (Rodger's WordPerfect 5.1 work-alike, built by the Makefile
+# from ../wp51/wp51c): its grammar checker needs ICU. Its other libraries
+# (GTK3, ncurses, libxml2, pcre2, libstdc++) are on the disk already.
+icu-libs
+# WritePerfect HTML plugins (ZHwriter, Thesaurus, Writer) need WebKitGTK,
+# the same engine the Mac uses as WKWebView.
+webkit2gtk-4.1
+# Preview (live/myos-preview, MyOS's own, made like Apple's) opens what the
+# Mac's Preview opens. PDFs through poppler; page edits (delete, reorder,
+# rotate, insert) are written by qpdf, which keeps links, forms and the
+# outline. Images through GTK's loaders, plus these for the formats GTK
+# doesn't know: HEIC/HEIF and AVIF (libheif, which also writes HEIC),
+# JPEG XL, WebP, camera RAW (libopenraw). JPEG 2000 (openjpeg), multi-page
+# TIFF (libtiff), OpenEXR and Photoshop are read by Preview itself.
+poppler-glib
+qpdf
+libheif-pixbuf-loader
+libavif-pixbuf-loader
+libjxl-pixbuf-loader
+webp-pixbuf-loader
+libopenraw-pixbuf-loader
+openjpeg
+openexr-libopenexr
+
+[browser]
+# Firefox: a real web browser (Alpine 3.20's 32-bit build). Chromium and
+# Chrome have no i386 packages. The extra libraries are video codecs
+# (ffmpeg, libvpx, x264); GTK3 is already on the disk. The session turns
+# the content-process sandbox off (this kernel has no seccomp) and mounts
+# /dev/shm for POSIX shared memory. It may still need more of /proc.
+firefox
 
 [dev]
 # Enough to build MyOS on MyOS, plus adb for Android phones and Python.
@@ -109,9 +150,20 @@ e2fsprogs
 cpio
 vim
 nano
+# Geany: a windowed code editor (tabs, file sidebar, build/run buttons). The
+# closest to VS Code on 32-bit x86: VS Code and Electron have no 32-bit Linux
+# builds since 2019/2022. It uses GTK3, which AbiWord already brings.
+geany
 curl
 rsync
 openssh-client-default
+# Headers for X programs: myos-login is compiled against these (on the Mac,
+# from build/live/sysroot), and they let MyOS build X programs itself.
+libx11-dev
+libxft-dev
+libpng-dev
+linux-pam-dev
+imlib2-dev
 
 [docs]
 # Manual pages: man itself, the Linux programmer's manual (syscalls, libc),
@@ -161,3 +213,34 @@ curl-doc
 rsync-doc
 openssh-doc
 e2fsprogs-doc
+
+[build-only]
+# Not on the disk: headers for compiling MyOS's own programs on the Mac
+# (build/live/sysroot). Only these packages, not what they depend on; the
+# libraries themselves are already on the disk (GTK3 comes with AbiWord).
+# Settings (live/myos-settings) is a GTK3 program.
+gtk+3.0-dev
+glib-dev
+pango-dev
+cairo-dev
+harfbuzz-dev
+gdk-pixbuf-dev
+at-spi2-core-dev
+# Preview (live/myos-preview): poppler's, libtiff's, openjpeg's, libheif's
+# and OpenEXR's headers.
+poppler-dev
+tiff-dev
+openjpeg-dev
+libheif-dev
+openexr-dev
+# WritePerfect: C++ headers (g++ has them) and its libraries' headers.
+g++
+libstdc++-dev
+ncurses-dev
+libxml2-dev
+pcre2-dev
+icu-dev
+webkit2gtk-4.1-dev
+libsoup3-dev
+# My Files (live/myos-files) draws the theme's own SVG icons with librsvg.
+librsvg-dev

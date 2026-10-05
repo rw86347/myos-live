@@ -16,6 +16,10 @@ mkdir -p /proc /sys /run                # a mount needs its mount point to exist
 mountpoint -q /proc || mount -t proc -o nosuid,noexec,nodev proc /proc 2>/dev/null
 mountpoint -q /sys  || mount -t sysfs -o nosuid,noexec,nodev sys /sys 2>/dev/null
 mountpoint -q /run  || mount -t tmpfs -o mode=0755,nosuid,nodev run /run 2>/dev/null
+# POSIX shared memory (shm_open): Firefox, GTK and Mesa look here.
+# System V shm (shmget) is a different thing, in the kernel.
+mkdir -p /dev/shm
+mountpoint -q /dev/shm || mount -t tmpfs -o mode=1777,nosuid,nodev,noexec shm /dev/shm 2>/dev/null
 mkdir -p /run/runit /tmp /var/log
 chmod 1777 /tmp
 

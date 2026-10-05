@@ -1,0 +1,25 @@
+# IceWM's per-program window options (this file replaces IceWM's own
+# /usr/share/icewm/winoptions). Here: each program's icon from the Golden
+# Hour icon set, which live/theme/make-live-theme.py puts in the theme.
+# Programs not listed use their own icon, or IceWM's red X.
+#
+# Each is written as instance.Class (what WM_CLASS holds; `xprop WM_CLASS`
+# shows it): GTK programs use their program name as the instance and the
+# same, capitalized, as the class (writeperfect, Writeperfect).
+xterm.XTerm.icon: terminal
+writeperfect.XTerm.icon: writeperfect
+writeperfect.Writeperfect.icon: writeperfect
+abiword.AbiWord.icon: text-editor
+myos-preview.Myos-preview.icon: preview
+preview.Preview.icon: preview
+myos-settings.Settings.icon: settings
+myos-files.Myos-files.icon: folder
+firefox.Navigator.icon: firefox
+Navigator.Firefox.icon: firefox
+firefox.Firefox.icon: firefox
+firefox.icon: firefox
+# The short forms too, for programs whose class is spelled differently.
+writeperfect.icon: writeperfect
+abiword.icon: text-editor
+myos-preview.icon: preview
+preview.icon: preview

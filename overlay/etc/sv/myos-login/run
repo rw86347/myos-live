@@ -1,0 +1,5 @@
+#!/bin/sh
+# The graphical login screen: myos-login starts the X server, shows the
+# Golden Hour login, and runs /etc/myos/xsession as whoever logs in. When
+# the session ends it exits and runit starts it again, with a fresh server.
+exec myos-login

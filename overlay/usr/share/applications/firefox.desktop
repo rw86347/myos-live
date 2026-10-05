@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Web Browser
+Comment=Browse the web
+Exec=firefox %u
+Icon=firefox
+Terminal=false
+Type=Application
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;

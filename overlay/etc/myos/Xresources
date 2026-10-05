@@ -1,0 +1,8 @@
+! X resources for every user, loaded by /etc/myos/xsession before the user's
+! own ~/.Xresources. Sizes are in points: myos-xsettings sets Xft.dpi from
+! the desktop's scale (Settings > Displays), so points grow with it.
+
+! xterm: an outline font instead of the default 6x13 bitmap, which no DPI
+! can make bigger.
+XTerm*faceName: DejaVu Sans Mono
+XTerm*faceSize: 11

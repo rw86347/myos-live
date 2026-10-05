@@ -1,0 +1,5 @@
+# IceWM's shortcut keys for every user (a user's ~/.icewm/keys wins).
+# Replaces IceWM's own list, whose other keys start programs that aren't on
+# the disk (a web browser, amixer).
+key "Alt+Ctrl+t"    xterm
+key "Alt+Ctrl+s"    myos-settings

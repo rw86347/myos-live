@@ -1,0 +1,6 @@
+# myos-admin: Settings' "Add User…" (myos-adduser) checks an administrator's
+# password the same way the login screen does -- pam_unix against /etc/shadow.
+# (The live disk's passwordless user gets in through base-auth's "nullok",
+# as at the login screen.) myos-adduser also requires the wheel group.
+auth      include    base-auth
+account   include    base-account

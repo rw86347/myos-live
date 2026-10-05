@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Preview
+Comment=View, mark up and convert PDFs and pictures
+Exec=myos-preview %F
+Icon=preview
+Terminal=false
+Categories=Graphics;Viewer;Office;
+MimeType=application/pdf;image/png;image/jpeg;image/heic;image/heif;image/avif;image/jxl;image/webp;image/tiff;image/gif;image/bmp;image/x-bmp;image/vnd.microsoft.icon;image/x-icon;image/x-icns;image/x-tga;image/jp2;image/jpx;image/x-exr;image/vnd.adobe.photoshop;image/svg+xml;image/x-portable-anymap;image/x-portable-pixmap;image/x-xbitmap;image/x-xpixmap;image/x-canon-cr2;image/x-nikon-nef;image/x-sony-arw;image/x-adobe-dng;image/x-olympus-orf;image/x-panasonic-rw2;image/x-fuji-raf;

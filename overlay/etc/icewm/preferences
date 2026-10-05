@@ -1,5 +1,50 @@
 # IceWM settings for every user (a user's ~/.icewm/preferences wins).
+
+# The desktop's look: the Golden Hour theme, written by
+# live/theme/make-live-theme.py from the palette in
+# assets/themes/golden-hour/make-theme.py.
+Theme="GoldenHour/default.theme"
+DesktopBackgroundImage="/usr/share/myos/theme/wallpaper.jpg"
+DesktopBackgroundScaled=1
+DesktopBackgroundCenter=1
+
 # Windows XP behaviour: a window's contents move and resize with it.
 # Plain X with no compositor makes that a pixel copy, cheap on old PCs.
 OpaqueMove=1
 OpaqueResize=1
+
+# The frame's corner pictures are round (8 px). This tells IceWM to cut
+# the program to that curve too. Left on (the default), the program stays
+# square and only the thin border follows the curve, so the bottom
+# corners look square. It is not a theme setting: IceWM ignores it in
+# default.theme. A maximized window drops the border, or the round cut
+# would show the desktop in the screen's corners.
+ShapesProtectClientWindow=0
+HideBordersMaximized=1
+
+# The taskbar, as in the mockup: Start on the left, one button per open
+# window, the tray on the right. Nothing else — no workspace switcher,
+# no mail or load meters. IceWM's clock stays, but only to hold its width:
+# its own drawing is a flat rectangle the width of the text, with no
+# divider. myos-menu paints the tray over it (its color, the line, the
+# icons and the time).
+TaskBarShowStartMenu=1     # the picture; myos-menu takes its clicks
+TaskBarShowWindowListMenu=0
+TaskBarShowShowDesktopButton=0
+TaskBarShowWorkspaces=0
+TaskBarShowClock=1          # the width; myos-menu draws what you see
+TaskBarShowMailboxStatus=0
+TaskBarShowCPUStatus=0
+TaskBarShowMEMStatus=0
+TaskBarShowNetStatus=0
+TaskBarShowAPMStatus=0
+TaskBarClockLeds=0
+TimeFormat="%I:%M %p"       # musl's strftime has no %l (hour, no zero)
+
+# The Start menu is our own program, myos-menu (started from
+# /etc/icewm/startup), so IceWM must leave Ctrl+Esc and the Windows key to it.
+KeySysMenu=""
+Win95Keys=0
+# Its Log off runs `icesh logout`; IceWM's own confirmation box isn't in
+# the theme, so there is none (Turn off doesn't ask either, for now).
+ConfirmLogout=0

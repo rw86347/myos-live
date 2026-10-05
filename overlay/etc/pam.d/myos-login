@@ -1,0 +1,7 @@
+# myos-login: the graphical login checks a user the same way the text
+# login does — pam_unix against /etc/shadow, with "nullok" so the live
+# disk's passwordless user can get in (base-auth).
+auth      include    base-auth
+account   include    base-account
+password  include    base-password
+session   include    base-session

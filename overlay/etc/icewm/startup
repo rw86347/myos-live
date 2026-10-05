@@ -1,0 +1,4 @@
+#!/bin/sh
+# Run by icewm-session once IceWM is up: the parts of the desktop that are ours.
+# myos-menu is the Start menu (see live/myos-menu/myos-menu.c).
+myos-menu &

@@ -4,6 +4,9 @@
     tools/fetch-live.py            build from live/packages.lock (exact files)
     tools/fetch-live.py --update   re-resolve live/packages.txt against Alpine's
                                    index and write a new lock file
+    tools/fetch-live.py --sysroot  only unpack the packages' headers and
+                                   libraries into build/live/sysroot, to
+                                   cross-compile MyOS's own programs against
 
 Steps:
   1. Read live/packages.txt: the programs we want, in groups.
@@ -16,7 +19,8 @@ Steps:
   4. Write the whole root file system into ONE archive, build/live/rootfs.tar:
      the packages' files, apk's database (lib/apk/db/installed) so apk on
      MyOS knows what is installed, the MyOS source in usr/src/myos, and our
-     own files from live/overlay on top.
+     own files from live/overlay on top, then the programs the Makefile
+     built for the live disk (build/live/extra: myos-login, myos-menu).
   5. Print the size of each group.
 
 Why an archive and not a folder: the Mac's disk ignores upper/lower case,
@@ -51,11 +55,18 @@ OVERLAY = os.path.join(ROOT, "live", "overlay")
 CACHE = os.path.join(ROOT, "build", "ext", "live")
 APKDIR = os.path.join(CACHE, "apk")
 OUT = os.path.join(ROOT, "build", "live", "rootfs.tar")
+EXTRA = os.path.join(ROOT, "build", "live", "extra")
+SYSROOT = os.path.join(ROOT, "build", "live", "sysroot")
 
 BRANCH = "v3.20"
 ARCH = "x86"
 MIRROR = os.environ.get("LIVE_MIRROR", "https://dl-cdn.alpinelinux.org/alpine")
 REPOS = ["main", "community"]
+# packages.txt's [build-only] group: unpacked into the sysroot for compiling
+# MyOS's own programs, never put on the disk. Only the packages named, not
+# their dependencies (gtk+3.0-dev's tree is 260 MiB, LLVM included; the
+# headers it needs are a few MiB).
+BUILD_ONLY = "build-only"
 
 # The live disk's user: no password (PAM's nullok lets an empty one in), in
 # wheel so `doas` works. The installer must ask for a real password.
@@ -199,6 +210,11 @@ def resolve(groups, pkgs, forbidden):
         for name in names:
             if name not in pkgs:
                 die(f"'{name}' ([{group}]) is not in Alpine {BRANCH} {ARCH}")
+            if group == BUILD_ONLY:
+                if name not in chosen:      # just the package: its headers, not its tree
+                    chosen[name] = group
+                    order.append((group, name))
+                continue
             visit(name, group, ())
 
     # install_if, as apk does it: a package whose conditions are all
@@ -210,6 +226,8 @@ def resolve(groups, pkgs, forbidden):
     while True:
         have = {}
         for n, g in chosen.items():
+            if g == BUILD_ONLY:
+                continue
             have[n] = g
             for tok in pkgs[n]["p"]:
                 have.setdefault(dep_name(tok), g)
@@ -473,25 +491,25 @@ def add_source(root):
     return n
 
 
-def add_overlay(root):
+def add_overlay(root, src=OVERLAY, group="overlay", who="MyOS overlay"):
     """live/overlay as it is, owned by root. Symlinks stay symlinks (runit's
     enabled services are links into /etc/sv)."""
     n = 0
-    for dirpath, dirnames, filenames in os.walk(OVERLAY):
+    for dirpath, dirnames, filenames in os.walk(src):
         links = [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]
         dirnames[:] = sorted(d for d in dirnames if d not in links)
         for fn in sorted(filenames + links):
             if fn == ".DS_Store":
                 continue
             full = os.path.join(dirpath, fn)
-            ti = root.tar.gettarinfo(full, os.path.relpath(full, OVERLAY))
+            ti = root.tar.gettarinfo(full, os.path.relpath(full, src))
             ti.uid = ti.gid = 0
             ti.uname = ti.gname = "root"
             if ti.isreg():
                 with open(full, "rb") as fo:
-                    root.add(ti, fo, "overlay", "MyOS overlay")
+                    root.add(ti, fo, group, who)
             else:
-                root.add(ti, None, "overlay", "MyOS overlay")
+                root.add(ti, None, group, who)
             n += 1
     return n
 
@@ -561,6 +579,40 @@ def first_boot_files(root, first_boot):
     return listing
 
 
+def make_sysroot(entries):
+    """Headers and libraries of every package, for a cross compiler on the
+    Mac: usr/include, usr/lib and lib. Absolute symlinks (usr/lib/libc.so ->
+    /lib/ld-musl-x86.so.1) are made relative, so they point inside the
+    sysroot rather than at the Mac's own /lib."""
+    import shutil
+    shutil.rmtree(SYSROOT, ignore_errors=True)
+    keep = ("usr/include/", "usr/lib/", "lib/")
+    n = 0
+    for e in entries:
+        payload = split_gzip(open(apk_path(e), "rb").read())[2]
+        with tarfile.open(fileobj=io.BytesIO(gzip.decompress(payload)), mode="r:", ignore_zeros=True) as t:
+            for m in t:
+                path = norm(m.name)
+                if not path.startswith(keep) or m.isdir():
+                    continue
+                dest = os.path.join(SYSROOT, path)
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                if os.path.lexists(dest):
+                    os.remove(dest)
+                if m.issym():
+                    target = m.linkname
+                    if target.startswith("/"):
+                        target = os.path.relpath(os.path.join(SYSROOT, target.lstrip("/")),
+                                                 os.path.dirname(dest))
+                    os.symlink(target, dest)
+                elif m.isreg():
+                    with open(dest, "wb") as f:
+                        f.write(t.extractfile(m).read())
+                    n += 1
+    open(os.path.join(SYSROOT, ".done"), "w").close()
+    print(f"{os.path.relpath(SYSROOT, ROOT)}: {n} files")
+
+
 def mib(n):
     return f"{n / (1 << 20):8.1f} MiB"
 
@@ -589,14 +641,20 @@ def main():
     if update:
         write_lock(entries)
         print(f"Wrote {os.path.relpath(LOCK, ROOT)}: {total} packages")
+    if "--sysroot" in sys.argv[1:]:
+        make_sysroot(entries)
+        return
 
+    entries = [e for e in entries if e["group"] != BUILD_ONLY]
+    total = len(entries)
     root = Root(OUT)
     db, scripts, first_boot, triggers = [], [], [], []
     for e in entries:
         add_package(root, e, db, scripts, first_boot, triggers)
 
     # apk's world file takes "!name" too: apk on MyOS won't install it either.
-    world = [n for _, names in groups for n in names] + sorted("!" + n for n in forbidden)
+    world = [n for g, names in groups if g != BUILD_ONLY for n in names] + \
+        sorted("!" + n for n in forbidden)
     root.add_bytes("lib/apk/db/installed", "\n".join(db).encode(), "overlay")
     root.add_bytes("lib/apk/db/triggers", ("\n".join(triggers) + "\n").encode(), "overlay")
     root.add_bytes("lib/apk/db/lock", b"", "overlay", 0o600)
@@ -612,6 +670,8 @@ def main():
     listing = first_boot_files(root, first_boot)
     nsrc = add_source(root)
     nover = add_overlay(root)
+    if os.path.isdir(EXTRA):
+        nover += add_overlay(root, EXTRA, "overlay", "MyOS build")
     add_live_user(root)
     root.close()
 
@@ -622,7 +682,7 @@ def main():
           f"{len(listing)} install scripts for the first boot, "
           f"{nsrc} source files, {nover} overlay files")
     print("Size (file contents, before compression):")
-    for g in [g for g, _ in groups] + ["myos-source", "overlay"]:
+    for g in [g for g, _ in groups if g != BUILD_ONLY] + ["myos-source", "overlay"]:
         n = sum(1 for e in entries if e["group"] == g)
         label = f"{n} packages" if n else ""
         print(f"  {g:<12} {mib(root.bytes.get(g, 0))}  {label}")

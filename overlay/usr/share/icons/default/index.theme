@@ -1,0 +1,6 @@
+# The mouse pointer for every X program that isn't told otherwise (the
+# login screen; inside a session myos-xsettings also sets Xcursor.theme and
+# the size): libXcursor looks for a theme called "default" first.
+[Icon Theme]
+Name=Default
+Inherits=Adwaita
