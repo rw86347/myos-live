@@ -7,6 +7,10 @@
     tools/fetch-live.py --sysroot  only unpack the packages' headers and
                                    libraries into build/live/sysroot, to
                                    cross-compile MyOS's own programs against
+    tools/fetch-live.py --login-root
+                                   a smaller archive (base+init+desktop+compositor)
+                                   for the live UEFI RAM boot, when USB storage
+                                   is not in the kernel yet
 
 Steps:
   1. Read live/packages.txt: the programs we want, in groups.
@@ -55,8 +59,13 @@ OVERLAY = os.path.join(ROOT, "live", "overlay")
 CACHE = os.path.join(ROOT, "build", "ext", "live")
 APKDIR = os.path.join(CACHE, "apk")
 OUT = os.path.join(ROOT, "build", "live", "rootfs.tar")
+LOGIN_OUT = os.path.join(ROOT, "build", "live", "login-root.tar")
 EXTRA = os.path.join(ROOT, "build", "live", "extra")
 SYSROOT = os.path.join(ROOT, "build", "live", "sysroot")
+# RAM login (live UEFI when the USB ext2 root is invisible): enough to
+# start X and myos-login. Office, Firefox, gcc and the source stay on disk.
+LOGIN_GROUPS = frozenset({"base", "init", "desktop", "compositor"})
+LOGIN_EXTRA_SKIP = ("usr/share/writeperfect", "usr/lib/writeperfect")
 
 BRANCH = "v3.20"
 ARCH = "x86"
@@ -491,7 +500,8 @@ def add_source(root):
     return n
 
 
-def add_overlay(root, src=OVERLAY, group="overlay", who="MyOS overlay"):
+def add_overlay(root, src=OVERLAY, group="overlay", who="MyOS overlay",
+                skip_prefix=()):
     """live/overlay as it is, owned by root. Symlinks stay symlinks (runit's
     enabled services are links into /etc/sv)."""
     n = 0
@@ -502,7 +512,10 @@ def add_overlay(root, src=OVERLAY, group="overlay", who="MyOS overlay"):
             if fn == ".DS_Store":
                 continue
             full = os.path.join(dirpath, fn)
-            ti = root.tar.gettarinfo(full, os.path.relpath(full, src))
+            rel = os.path.relpath(full, src)
+            if any(rel == p or rel.startswith(p + "/") for p in skip_prefix):
+                continue
+            ti = root.tar.gettarinfo(full, rel)
             ti.uid = ti.gid = 0
             ti.uname = ti.gname = "root"
             if ti.isreg():
@@ -619,6 +632,7 @@ def mib(n):
 
 def main():
     update = "--update" in sys.argv[1:]
+    login_only = "--login-root" in sys.argv[1:]
     groups, forbidden = read_world()
 
     if update:
@@ -646,14 +660,21 @@ def main():
         return
 
     entries = [e for e in entries if e["group"] != BUILD_ONLY]
+    if login_only:
+        entries = [e for e in entries if e["group"] in LOGIN_GROUPS]
+        out_path = LOGIN_OUT
+    else:
+        out_path = OUT
     total = len(entries)
-    root = Root(OUT)
+    root = Root(out_path)
     db, scripts, first_boot, triggers = [], [], [], []
     for e in entries:
         add_package(root, e, db, scripts, first_boot, triggers)
 
     # apk's world file takes "!name" too: apk on MyOS won't install it either.
-    world = [n for g, names in groups if g != BUILD_ONLY for n in names] + \
+    world = [n for g, names in groups
+             if g != BUILD_ONLY and (not login_only or g in LOGIN_GROUPS)
+             for n in names] + \
         sorted("!" + n for n in forbidden)
     root.add_bytes("lib/apk/db/installed", "\n".join(db).encode(), "overlay")
     root.add_bytes("lib/apk/db/triggers", ("\n".join(triggers) + "\n").encode(), "overlay")
@@ -668,17 +689,18 @@ def main():
     root.add_bytes("etc/apk/world", ("\n".join(world) + "\n").encode(), "overlay")
     root.add_bytes("etc/apk/arch", f"{ARCH}\n".encode(), "overlay")
     listing = first_boot_files(root, first_boot)
-    nsrc = add_source(root)
+    nsrc = 0 if login_only else add_source(root)
     nover = add_overlay(root)
     if os.path.isdir(EXTRA):
-        nover += add_overlay(root, EXTRA, "overlay", "MyOS build")
+        extra_skip = LOGIN_EXTRA_SKIP if login_only else ()
+        nover += add_overlay(root, EXTRA, "overlay", "MyOS build", extra_skip)
     add_live_user(root)
     root.close()
 
     if root.clashes:
         print(f"Files installed by two packages (the later one is kept): {len(root.clashes)}")
         print("\n".join(root.clashes[:20]))
-    print(f"\n{os.path.relpath(OUT, ROOT)}: {total} packages, "
+    print(f"\n{os.path.relpath(out_path, ROOT)}: {total} packages, "
           f"{len(listing)} install scripts for the first boot, "
           f"{nsrc} source files, {nover} overlay files")
     print("Size (file contents, before compression):")
