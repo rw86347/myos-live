@@ -11,6 +11,11 @@
                                    a smaller archive (base+init+desktop+compositor)
                                    for the live UEFI RAM boot, when USB storage
                                    is not in the kernel yet
+    tools/fetch-live.py --arch x86|x86_64
+                                   Alpine architecture. Default x86 (i386).
+                                   x86_64 merges live/packages.x86_64.txt on
+                                   top of packages.txt and uses
+                                   live/packages.x86_64.lock.
 
 Steps:
   1. Read live/packages.txt: the programs we want, in groups.
@@ -62,6 +67,8 @@ OUT = os.path.join(ROOT, "build", "live", "rootfs.tar")
 LOGIN_OUT = os.path.join(ROOT, "build", "live", "login-root.tar")
 EXTRA = os.path.join(ROOT, "build", "live", "extra")
 SYSROOT = os.path.join(ROOT, "build", "live", "sysroot")
+WORLD_FILES = [WORLD]
+ARCH_ALIASES = {"i386": "x86", "x86": "x86", "x86_64": "x86_64", "amd64": "x86_64"}
 # RAM login (live UEFI when the USB ext2 root is invisible): enough to
 # start X and myos-login. Office, Firefox, gcc and the source stay on disk.
 LOGIN_GROUPS = frozenset({"base", "init", "desktop", "compositor"})
@@ -86,6 +93,47 @@ KEEP = ("etc/passwd", "etc/group", "etc/shadow")   # Root keeps a copy of these
 
 def die(msg):
     sys.exit(f"fetch-live: {msg}")
+
+
+def parse_arch(argv):
+    """Pull --arch NAME out of argv. Returns (alpine_arch, leftover)."""
+    arch, out, i = "x86", [], 0
+    while i < len(argv):
+        if argv[i] == "--arch":
+            if i + 1 >= len(argv):
+                die("--arch needs x86 or x86_64")
+            name = argv[i + 1]
+            if name not in ARCH_ALIASES:
+                die(f"unknown --arch {name} (want x86 / i386 / x86_64)")
+            arch = ARCH_ALIASES[name]
+            i += 2
+            continue
+        out.append(argv[i])
+        i += 1
+    return arch, out
+
+
+def configure(alpine_arch):
+    """Set ARCH, lock path, world files, apk cache. x86 keeps the paths
+    that already exist so a fetch does not re-download the 32-bit tree."""
+    global ARCH, LOCK, WORLD_FILES, APKDIR, OUT, LOGIN_OUT, SYSROOT, EXTRA
+    ARCH = alpine_arch
+    if alpine_arch == "x86":
+        LOCK = os.path.join(ROOT, "live", "packages.lock")
+        WORLD_FILES = [WORLD]
+        APKDIR = os.path.join(CACHE, "apk")
+        OUT = os.path.join(ROOT, "build", "live", "rootfs.tar")
+        LOGIN_OUT = os.path.join(ROOT, "build", "live", "login-root.tar")
+        SYSROOT = os.path.join(ROOT, "build", "live", "sysroot")
+        EXTRA = os.path.join(ROOT, "build", "live", "extra")
+    else:
+        LOCK = os.path.join(ROOT, "live", f"packages.{alpine_arch}.lock")
+        WORLD_FILES = [WORLD, os.path.join(ROOT, "live", f"packages.{alpine_arch}.txt")]
+        APKDIR = os.path.join(CACHE, f"apk-{alpine_arch}")
+        OUT = os.path.join(ROOT, "build", "live", f"rootfs-{alpine_arch}.tar")
+        LOGIN_OUT = os.path.join(ROOT, "build", "live", f"login-root-{alpine_arch}.tar")
+        SYSROOT = os.path.join(ROOT, "build", "live", f"sysroot-{alpine_arch}")
+        EXTRA = os.path.join(ROOT, "build", "live", f"extra.{alpine_arch}")
 
 
 def fetch(url, dest):
@@ -113,11 +161,13 @@ def sha256(path):
 
 # --- 1. what we want ----------------------------------------------------------
 
-def read_world():
-    """Returns ([(group, [names])], {forbidden names})."""
-    groups, group, forbidden = [], None, set()
-    for line in open(WORLD):
-        line = line.split("#", 1)[0].strip()
+def read_world_file(path, groups, group_map, forbidden):
+    """Append one world file: new groups, extra names in an existing
+    group, or !name to drop a package on this architecture."""
+    current, lineno = None, 0
+    for raw in open(path):
+        lineno += 1
+        line = raw.split("#", 1)[0].strip()
         if not line:
             continue
         if line.startswith("!"):
@@ -125,12 +175,29 @@ def read_world():
             continue
         m = re.fullmatch(r"\[(\w[\w-]*)\]", line)
         if m:
-            group = (m.group(1), [])
-            groups.append(group)
-        elif group is None:
-            die(f"{WORLD}: '{line}' comes before the first [group]")
-        else:
-            group[1].append(line)
+            name = m.group(1)
+            if name in group_map:
+                current = group_map[name]
+            else:
+                current = []
+                groups.append((name, current))
+                group_map[name] = current
+            continue
+        if current is None:
+            die(f"{path}:{lineno}: '{line}' comes before the first [group]")
+        if line not in current:
+            current.append(line)
+
+
+def read_world():
+    """Returns ([(group, [names])], {forbidden names})."""
+    groups, group_map, forbidden = [], {}, set()
+    for path in WORLD_FILES:
+        if not os.path.exists(path):
+            die(f"missing {os.path.relpath(path, ROOT)}")
+        read_world_file(path, groups, group_map, forbidden)
+    for g, names in groups:
+        names[:] = [n for n in names if n not in forbidden]
     return groups, forbidden
 
 
@@ -141,7 +208,8 @@ def load_index():
     pkgs = {}
     os.makedirs(CACHE, exist_ok=True)
     for repo in REPOS:
-        path = os.path.join(CACHE, f"APKINDEX-{repo}.tar.gz")
+        path = os.path.join(CACHE, f"APKINDEX-{repo}.tar.gz" if ARCH == "x86"
+                            else f"APKINDEX-{ARCH}-{repo}.tar.gz")
         if not os.path.exists(path) or time.time() - os.path.getmtime(path) > 86400:
             print(f"Downloading the {repo} package index...")
             fetch(f"{MIRROR}/{BRANCH}/{repo}/{ARCH}/APKINDEX.tar.gz", path)
@@ -261,7 +329,14 @@ def resolve(groups, pkgs, forbidden):
 # --- the lock file --------------------------------------------------------------
 
 def world_hash():
-    return hashlib.sha256(open(WORLD, "rb").read()).hexdigest()
+    # x86 hashes only packages.txt, the same bytes the existing lock uses.
+    if len(WORLD_FILES) == 1:
+        return hashlib.sha256(open(WORLD_FILES[0], "rb").read()).hexdigest()
+    h = hashlib.sha256()
+    for path in WORLD_FILES:
+        h.update(os.path.relpath(path, ROOT).encode() + b"\0")
+        h.update(open(path, "rb").read())
+    return h.hexdigest()
 
 
 def write_lock(entries):
@@ -277,7 +352,9 @@ def write_lock(entries):
 
 def read_lock():
     if not os.path.exists(LOCK):
-        die("no live/packages.lock yet: run tools/fetch-live.py --update")
+        die(f"no {os.path.relpath(LOCK, ROOT)} yet: "
+            "run tools/fetch-live.py --arch "
+            f"{'x86_64' if ARCH != 'x86' else 'x86'} --update")
     entries, world = [], None
     for line in open(LOCK):
         if line.startswith("#") or not line.strip():
@@ -288,8 +365,8 @@ def read_lock():
             continue
         entries.append(dict(group=f[0], name=f[1], version=f[2], repo=f[3], sha=f[4]))
     if world != world_hash():
-        die("live/packages.txt changed since the lock was written: "
-            "run tools/fetch-live.py --update")
+        die(f"{os.path.relpath(WORLD_FILES[0], ROOT)} changed since the lock "
+            "was written: run tools/fetch-live.py --update")
     return entries
 
 
@@ -631,8 +708,10 @@ def mib(n):
 
 
 def main():
-    update = "--update" in sys.argv[1:]
-    login_only = "--login-root" in sys.argv[1:]
+    alpine_arch, argv = parse_arch(sys.argv[1:])
+    configure(alpine_arch)
+    update = "--update" in argv
+    login_only = "--login-root" in argv
     groups, forbidden = read_world()
 
     if update:
@@ -655,7 +734,7 @@ def main():
     if update:
         write_lock(entries)
         print(f"Wrote {os.path.relpath(LOCK, ROOT)}: {total} packages")
-    if "--sysroot" in sys.argv[1:]:
+    if "--sysroot" in argv:
         make_sysroot(entries)
         return
 
@@ -691,6 +770,9 @@ def main():
     listing = first_boot_files(root, first_boot)
     nsrc = 0 if login_only else add_source(root)
     nover = add_overlay(root)
+    arch_overlay = os.path.join(ROOT, "live", f"overlay.{ARCH}")
+    if os.path.isdir(arch_overlay):
+        nover += add_overlay(root, arch_overlay, "overlay", f"MyOS overlay.{ARCH}")
     if os.path.isdir(EXTRA):
         extra_skip = LOGIN_EXTRA_SKIP if login_only else ()
         nover += add_overlay(root, EXTRA, "overlay", "MyOS build", extra_skip)

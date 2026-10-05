@@ -1,0 +1,19 @@
+# packages.x86_64.txt — extras and replacements for the 64-bit live disk.
+#
+# Merged on top of live/packages.txt by:
+#   tools/fetch-live.py --arch x86_64
+# One tree: do not copy packages.txt. Same group names append; a leading
+# "!" drops a package the 32-bit disk still wants.
+#
+# There is no packages.x86_64.lock yet. First fetch:
+#   python3 tools/fetch-live.py --arch x86_64 --update
+#
+# Chromium has no i386 Alpine package. Firefox stays on the 32-bit disk
+# (live/packages.txt [browser]). Cursor is not an Alpine package; if it
+# is added later it belongs in live/extra.x86_64/, not a second overlay
+# tree. Optional x64-only files go in live/overlay.x86_64/.
+
+!firefox
+
+[browser]
+chromium
