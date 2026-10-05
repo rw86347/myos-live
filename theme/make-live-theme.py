@@ -37,7 +37,7 @@ import zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 THEME_DIR = os.path.join(ROOT, "assets", "themes", "golden-hour")
-OUT = os.path.join(ROOT, "build", "live", "extra")
+OUT = os.path.abspath(os.environ.get("LIVE_EXTRA", os.path.join(ROOT, "build", "live", "extra")))
 WORK = os.path.join(ROOT, "build", "live", "theme-svg")
 
 # The design, imported as a module (its file name has a dash in it).
@@ -95,6 +95,7 @@ def render(name, body, w, h, out, ow=None, oh=None, exact=False):
     unless exact says ow x oh are already the PNG's own pixels."""
     path = os.path.join(WORK, name + ".svg")
     open(path, "w").write(svg(body, w, h))
+    out = os.path.abspath(out)
     os.makedirs(os.path.dirname(out), exist_ok=True)
     pw, ph = (ow, oh) if exact else (px(ow or w), px(oh or h))
     subprocess.run(["rsvg-convert", path, "-w", str(pw), "-h", str(ph), "-o", out],

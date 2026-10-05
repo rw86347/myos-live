@@ -12,8 +12,11 @@
 # the tar says (root, group shadow...).
 set -e
 img=$1 tar=$2 out=$3 mb=$4
-[ -f "$img" ] && [ -f "$tar" ] && [ -n "$out" ] && [ -n "$mb" ] ||
-    { echo "usage: $0 boot.img rootfs.tar out.img MiB" >&2; exit 1; }
+# img="-" : ext2 myos-root only (x86_64 UEFI; the bootloader is on the ESP).
+[ -n "$img" ] && [ -f "$tar" ] && [ -n "$out" ] && [ -n "$mb" ] ||
+    { echo "usage: $0 boot.img|- rootfs.tar out.img MiB" >&2; exit 1; }
+[ "$img" = "-" ] || [ -f "$img" ] ||
+    { echo "usage: $0 boot.img|- rootfs.tar out.img MiB" >&2; exit 1; }
 E2FS=${E2FS:-/opt/homebrew/opt/e2fsprogs/sbin}
 
 work=$(mktemp -d /tmp/mklivehd.XXXXXX)
@@ -43,11 +46,24 @@ EOF
 rm -f "$mnt/root/.dummy"
 find "$mnt/root" -name .DS_Store -delete
 
-cp "$img" "$out"
-S=$(( $(wc -c < "$img") / 512 ))
-START=$(( (S + 2047) / 2048 * 2048 ))
-"$E2FS/mke2fs" -q -t ext2 -O none,filetype,sparse_super -L myos-root -b 4096 \
-    -d "$mnt/root" -E offset=$((START * 512)),root_owner=0:0 -F "$out" "${mb}M"
+if [ "$img" = "-" ]; then
+    python3 -c "open('$out','wb').truncate($mb * 1048576)"
+    START=0
+    OFFSET=0
+    S=0
+else
+    cp "$img" "$out"
+    S=$(( $(wc -c < "$img") / 512 ))
+    START=$(( (S + 2047) / 2048 * 2048 ))
+    OFFSET=$((START * 512))
+fi
+if [ "$OFFSET" -eq 0 ]; then
+    "$E2FS/mke2fs" -q -t ext2 -O none,filetype,sparse_super -L myos-root -b 4096 \
+        -d "$mnt/root" -E root_owner=0:0 -F "$out" "${mb}M"
+else
+    "$E2FS/mke2fs" -q -t ext2 -O none,filetype,sparse_super -L myos-root -b 4096 \
+        -d "$mnt/root" -E offset=$OFFSET,root_owner=0:0 -F "$out" "${mb}M"
+fi
 
 # Owners from the tar, as debugfs commands on the partition (a file that's
 # in the tar twice gets its last owner, like the unpacked file).
@@ -62,11 +78,20 @@ for name, (uid, gid) in owner.items():
     print(f'sif "/{name}" uid {uid}')
     print(f'sif "/{name}" gid {gid}')
 EOF
-"$E2FS/debugfs" -w -f "$work/owners.cmd" "$out?offset=$((START * 512))" >/dev/null 2>"$work/debugfs.err" || true
+if [ "$OFFSET" -eq 0 ]; then
+    dbg="$out"
+else
+    dbg="$out?offset=$OFFSET"
+fi
+"$E2FS/debugfs" -w -f "$work/owners.cmd" "$dbg" >/dev/null 2>"$work/debugfs.err" || true
 if grep -v '^debugfs ' "$work/debugfs.err" | grep -q .; then
     echo "debugfs complained:" >&2
     grep -v '^debugfs ' "$work/debugfs.err" | head >&2
     exit 1
 fi
-"$(dirname "$0")/mbr-partition.sh" "$out" "$S" "$START" $((mb * 2048))
-echo "Built $out (boot area + $mb MiB ext2 myos-root, live userland)"
+if [ "$img" != "-" ]; then
+    "$(dirname "$0")/mbr-partition.sh" "$out" "$S" "$START" $((mb * 2048))
+    echo "Built $out (boot area + $mb MiB ext2 myos-root, live userland)"
+else
+    echo "Built $out ($mb MiB ext2 myos-root, live userland)"
+fi
