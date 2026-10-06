@@ -626,8 +626,9 @@ def run_svg():
 
 def tray_picture(out):
     """The right end of the taskbar: its own top-to-bottom color, the dark
-    divider, and the network and volume icons. myos-menu draws the time on
-    top, so the picture has no clock baked in.
+    divider, and the volume icon. myos-menu draws the time on top, so the
+    picture has no clock baked in, and the network icon is a real one: the
+    Wi-Fi icon (myos-wifi) docks where the mockup has it (menu.conf "icon").
 
     IceWM can't paint this. Its clock is one flat color, only as wide as the
     text, and it stretches the taskbar picture across the whole bar, so a
@@ -642,7 +643,6 @@ def tray_picture(out):
     st = S("Tray", "normal")
     body = (mt.draw_bar(bar_style(), 0, 0, 1 + TRAY_W, BAR_H) +
             mt.draw_bar(st, 1, 0, TRAY_W, BAR_H) +
-            mt.img("tray-network", 13, 11, 18) +
             mt.img("tray-volume", 39, 11, 18))
     render("tray", body, 1 + TRAY_W, BAR_H, out)
 
@@ -697,6 +697,7 @@ def start_menu():
     tray_picture(os.path.join(MENU, "tray.png"))
     conf.append("tray tray.png")
     conf.append("clock %d %d %d" % (px(105), px(25), px(12)))
+    conf.append("icon %d %d %d" % (px(13), px(11), px(18)))   # the docked icon's slot
     open(os.path.join(MENU, "menu.conf"), "w").write("\n".join(conf) + "\n")
 
 

@@ -1,0 +1,15 @@
+#!/bin/sh
+# sshd: OpenSSH, in the foreground so runit sees it.
+# Host keys: first boot and every start (ssh-keygen -A is a no-op if they exist).
+# The sshd system user comes from Alpine's post-install; if first-boot did
+# not finish, make a locked account so the daemon can still drop privileges.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+# Not installed (an image built from an older package lock, LIVE_STALE_LOCK):
+# wait quietly instead of failing, and being restarted, every second.
+[ -x /usr/sbin/sshd ] || exec sleep 2147483647
+if ! grep -q '^sshd:' /etc/passwd 2>/dev/null; then
+    adduser -S -D -H -h /var/empty -s /sbin/nologin sshd 2>/dev/null || true
+fi
+mkdir -p /var/empty /etc/ssh
+ssh-keygen -A >/dev/null 2>&1 || true
+exec /usr/sbin/sshd -D -e

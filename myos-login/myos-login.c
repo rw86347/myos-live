@@ -56,6 +56,8 @@
 #define MAX_USERS 8
 #define PASS_MAX  128
 
+static void say(const char *what);      /* a line on the console */
+
 /* The palette, from make-theme.py. */
 #define BAND_TOP    0x0e2c52
 #define BAND_BOTTOM 0x133f63
@@ -582,6 +584,7 @@ static int try_login(void)
     }
     pam_setcred(pamh, PAM_ESTABLISH_CRED);
     pam_open_session(pamh, 0);
+    say("logged in");
     char **pamenv = pam_getenvlist(pamh);
     long secs = run_session(pamh, pw, pamenv);
     pam_setcred(pamh, PAM_DELETE_CRED);
@@ -675,13 +678,30 @@ static int hit(int x, int y)
     return -1;
 }
 
+/* One line on the console (a machine with no serial port shows it last;
+   the desktop test waits for these). */
+static void say(const char *what)
+{
+    FILE *con = fopen("/dev/console", "w");
+    if (con) {
+        fprintf(con, "myos-login: %s\n", what);
+        fclose(con);
+    }
+}
+
 static void event_loop(void)
 {
+    int shown = 0;
     for (;;) {
         XEvent ev;
         XNextEvent(ui.dpy, &ev);
         if (ev.type == Expose && ev.xexpose.count == 0) {
             redraw();
+            /* Say so once it is on the screen and takes keys: on a machine
+               with no serial port it is the last line before the picture,
+               and the desktop test waits for it before pressing Enter. */
+            if (!shown++)
+                say("the login screen is up");
         } else if (ev.type == ButtonPress) {
             int n = hit(ev.xbutton.x, ev.xbutton.y);
             if (n == -2) {

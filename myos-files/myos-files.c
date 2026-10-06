@@ -51,6 +51,7 @@
 #include <poppler.h>
 #include <X11/Xatom.h>
 
+#include "../myos-heic/heif-pixbuf.h"
 #include "scale.h"
 
 /* --- the theme's colours (make-theme.py's palette, C[...]) ----------------- */
@@ -403,8 +404,27 @@ static int name_is_pic(const char *name)
            !strcasecmp(dot + 1, "jpe") || !strcasecmp(dot + 1, "png") ||
            !strcasecmp(dot + 1, "gif") || !strcasecmp(dot + 1, "bmp") ||
            !strcasecmp(dot + 1, "webp") || !strcasecmp(dot + 1, "tif") ||
-           !strcasecmp(dot + 1, "tiff") || !strcasecmp(dot + 1, "svg") ||
-           !strcasecmp(dot + 1, "ico") || !strcasecmp(dot + 1, "pdf");
+           !strcasecmp(dot + 1, "tiff") || !strcasecmp(dot + 1, "heic") ||
+           !strcasecmp(dot + 1, "heif") || !strcasecmp(dot + 1, "avif") ||
+           !strcasecmp(dot + 1, "svg") || !strcasecmp(dot + 1, "ico") ||
+           !strcasecmp(dot + 1, "pdf");
+}
+
+/* HEIC/HEIF/AVIF through libheif; everything else through gdk-pixbuf. */
+static GdkPixbuf *pixbuf_at_scale(const char *path, int w, int h)
+{
+    guchar head[32] = {0};
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    gsize n = 0;
+    if (fd >= 0) {
+        ssize_t got = read(fd, head, sizeof head);
+        close(fd);
+        if (got > 0)
+            n = (gsize)got;
+    }
+    if (myos_heif_sniff(head, n) || myos_heif_path(path))
+        return myos_heif_pixbuf_from_file_at_scale(path, w, h, TRUE, NULL);
+    return gdk_pixbuf_new_from_file_at_scale(path, w, h, TRUE, NULL);
 }
 
 /* In memory: the sidecar we already read, so a redraw does not open it again. */
@@ -545,9 +565,8 @@ static int thumb_make(const char *path, time_t mtime)
     long long cap = name_is_pdf(base) ? PDF_THUMB_MAX : PREVIEW_MAX;
     if (st.st_size > cap)
         return 0;
-    GdkPixbuf *pb = name_is_pdf(base)
-        ? thumb_from_pdf(path)
-        : gdk_pixbuf_new_from_file_at_scale(path, THUMB_PX, THUMB_PX, TRUE, NULL);
+    GdkPixbuf *pb = name_is_pdf(base) ? thumb_from_pdf(path)
+                                     : pixbuf_at_scale(path, THUMB_PX, THUMB_PX);
     if (!pb) {
         tcache_put(path, mtime, NULL, 1);
         return 0;
@@ -771,7 +790,7 @@ static const char *const WP_EXT[] = { "wpd", "wp", "wp5", "wp6", NULL };
 static const char *const DOC_EXT[] = { "doc", "docx", "rtf", "odt", "abw", NULL };
 static const char *const WEB_EXT[] = { "html", "htm", "xhtml", NULL };
 static const char *const IMG_EXT[] = { "png", "jpg", "jpeg", "gif", "bmp", "svg", "webp", "tif",
-    "tiff", "ico", "xpm", "tga", "pnm", "ppm", "pgm", "pbm", NULL };
+    "tiff", "heic", "heif", "avif", "ico", "xpm", "tga", "pnm", "ppm", "pgm", "pbm", NULL };
 
 static const char *file_icon(const char *name, const char *path, const struct stat *st)
 {
@@ -1568,7 +1587,7 @@ static int preview_image(cairo_t *cr, const char *path, time_t mtime, double bx,
         pimg.failed = 1;
         struct stat st;
         if (!stat(path, &st) && st.st_size <= PREVIEW_MAX) {
-            GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_scale(path, pw, ph, TRUE, NULL);
+            GdkPixbuf *pb = pixbuf_at_scale(path, pw, ph);
             if (pb) {
                 pimg.iw = gdk_pixbuf_get_width(pb);
                 pimg.ih = gdk_pixbuf_get_height(pb);

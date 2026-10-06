@@ -178,6 +178,7 @@ GPtrArray *codec_read_tiff(const char *path, double *dpi, GError **err);  /* Gdk
 GdkPixbuf *codec_read_jp2(const char *path, GError **err);
 GdkPixbuf *codec_read_exr(const char *path, GError **err);
 GdkPixbuf *codec_read_psd(const char *path, GError **err);
+GdkPixbuf *codec_read_heic(const char *path, GError **err);
 gboolean codec_write_tiff(GPtrArray *pixbufs, const char *path, int compression, double dpi,
                           gboolean alpha, GError **err);
 gboolean codec_write_jp2(GdkPixbuf *pix, const char *path, double quality, GError **err);

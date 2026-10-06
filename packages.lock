@@ -1,7 +1,7 @@
 # packages.lock — written by tools/fetch-live.py --update; do not edit.
 # Every package on the live disk, in install order, with the SHA-256 of
 # its .apk. The build refuses any download that doesn't match.
-world 3737daa40a3df52713053ec212143084b1d613f3e1d4af08350f1e7994b81124
+world 50fe7a5a50d6373ff0934911c52a7d2056239f52f1e75942b52ed509847a16d4
 # group      package                          version              repo       sha256
 base         alpine-baselayout-data           3.6.5-r0             main       bbe2d06925bd6e6d8f540f601777f8123e50ea4b25727d2fcb5df5776eddf591
 base         musl                             1.2.5-r3             main       7e56fb578429d6c493c3cc07a7390635a5d76dcc6e38c74fbec9279b2d68ab63
@@ -88,6 +88,8 @@ init         libmd                            1.1.0-r0             main       a1
 init         libbsd                           0.12.2-r0            main       61a27bd0c5839597625abe8191517459191f752bd83fd3756bbfa6adbb2b450d
 init         shadow                           4.15.1-r0            community  2bdd266c606f3e4756a47546561a261c94afc74ac8ba80d7d59bdce2973b6cf4
 init         doas                             6.8.2-r7             main       4c008c6754385c42227df8e7cf47100808d11547f9429aa36708cc84b22d0ea0
+init         openssh-server-common            9.7_p1-r5            main       0258c42478dfad1bac31dec41066029704503884803dfd1565538e1af60959dd
+init         openssh-server                   9.7_p1-r5            main       12590066693ac675e6515335b76dea99be6aa2d9444089cd60e0d01ddff36d58
 desktop      encodings                        1.0.7-r1             main       86f7a1e728533e0a7f422e1cd2655d0d23bfc4a895def0bb82b33388e5baf6da
 desktop      font-alias                       1.0.5-r0             main       1919febf50fcc736dd743ca7c8c50e7601ece78dd77be29eb7baee6ece1ba954
 desktop      libfontenc                       1.1.8-r0             main       65c32eff22b152a675cd0882006bd1347827bead2f6c59fb466dd766d9729269
@@ -493,7 +495,7 @@ build-only   tiff-dev                         4.6.0t-r0            main       7b
 build-only   openjpeg-dev                     2.5.2-r0             main       270279ad8c9088d0b833f2855674d747a00445b87272430f58e2d194519e5d79
 build-only   libheif-dev                      1.17.6-r1            community  ccc671dbf2e4cdb765f434810c210d8c0632c4d24edebf117caa19af340fe597
 build-only   openexr-dev                      3.1.13-r1            community  4ede9a78f51c95164a30649377203d1deb4148de3cb34cbbca99a762c9988328
-build-only   g++                              13.2.1_git20240309-r1 main       23c848162e99240e513300ac6be7b21fa65c8b57235a206143f67f0c5ae3654d
+dev          g++                              13.2.1_git20240309-r1 main       23c848162e99240e513300ac6be7b21fa65c8b57235a206143f67f0c5ae3654d
 build-only   libstdc++-dev                    13.2.1_git20240309-r1 main       a9537d5f083c80a14431a686ee479f5d3210362f61b76c24a5f83d5c51f4ef02
 build-only   ncurses-dev                      6.4_p20240420-r2     main       2e53824aa26adfee0138ce6e7d43519ecda775ac2f01dd13e610ad59cf78de9b
 build-only   libxml2-dev                      2.12.10-r0           main       35b5255901de3e84a020ae290d2c053a50748e6ee20f20a19fc414f7f95cfd9b
@@ -530,3 +532,23 @@ base         util-linux-bash-completion       2.40.1-r1            main       6a
 base         uuidgen                          2.40.1-r1            main       955b074fdde0f80874bb5c14791b5f608144fc8e3c005bc7ddd8276a8828e35d
 base         wipefs                           2.40.1-r1            main       306505363514cb0bbc010ad0c9c8b6cc50941b3effa4e16e6ac39bac363ea7f9
 dev          xcb-proto-pyc                    1.16.0-r1            main       ba3d56c31d050b8c64e0bc163fbb4fc14b99ba84705dcbe335359320eabdfaf4
+www          darkhttpd                        1.16-r0              main       59f72ef4f43ef480e0fbf936e332457a67b6dc4f125c14a66a65dba5a19ebfe4
+dev          python3-dev                      3.12.13-r0           main       1609f9791ad43bde2b9cc2e8e80f5c35010410a0661dca6fdfb1e29be814581c
+dev          py3-parsing                      3.1.2-r1             main       371a899cf1a70754ff6f545487c6959804ecb624b41c002a42156f5d120c8874
+dev          py3-packaging                    24.0-r1              main       8e953ea40f5ebc5e8c40021cdcb9ef44f2a0190d076fc4db045c441929b53f6c
+dev          py3-setuptools                   70.3.0-r0            main       ebaf6fab5b39026b5b72162dbe529df5c522a6bb8e34e874d95ba6624db47ed5
+dev          py3-pip                          24.0-r2              community  5297646ceccb64af3d4ddb07266b0eb2778a79312d0f4bc26f66ca4924470e4a
+dev          openjdk8-jre-lib                 8.432.06-r0          community  21fb2cc1e34943ccaea09f4487acacd7e9af652f21dc731e38d09d9614eb6bfd
+dev          java-common                      0.5-r0               community  1223e9741f2baee067735769dc476ac365541372cd561da91cf039a6aa22657f
+dev          p11-kit-trust                    0.25.3-r0            main       250d58b53d1c0eb3f321a360509846cd0429f6dbb16f55516de981e6b4c5d075
+dev          java-cacerts                     1.0-r1               community  93b9b4d37385580180cb9414f7f97804c62f22a540b0aeafd4db559d8f013a9e
+dev          krb5-conf                        1.0-r2               main       d24290b9c8727707302c0c49db369efa0298c69c4a66e00eeb9f5b1293cc34ae
+dev          keyutils-libs                    1.6.3-r3             main       84c8006d11884a6b85b93eb26405a49e27dbb334aadc186282c6e855beb3446b
+dev          libverto                         0.3.2-r2             main       0e5e21f9bf57a144211c864e9473d7f76193e3999511bb2250444f29665e36c2
+dev          krb5-libs                        1.21.3-r0            main       99f69e4313813779da478c2b2210f782badd62f57518b05331251a1de854c766
+dev          pcsc-lite-libs                   2.2.3-r0             main       0840ee9b14c4766ef36eeb65c032aa1249cb106267a6e39cdb87a86d60c32d65
+dev          liblksctp                        1.0.19-r5            main       db84ae9832d47d53b1ee1f32c82e786ce36350e0274eb7fd776d7cb55f0a9010
+dev          openjdk8-jre-base                8.432.06-r0          community  b68680442d6678d2930e04878ebc015f2442ba308c37244f74437e5ed7c290e3
+dev          openjdk8-jre                     8.432.06-r0          community  52d175d784aa4a396f70de931f69e5faec0c8a2742520a55cf894714a79f0dfd
+dev          openjdk8-jdk                     8.432.06-r0          community  f417c2751d8aef21a863ad5b1949feb99d6880153ccd79ce1feb9a24ec68c415
+dev          openjdk8                         8.432.06-r0          community  4ff84b17b7b29f4b404e7dc834e84e86de0e83535ed1f39a182f5be5bd81705e

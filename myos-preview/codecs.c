@@ -9,7 +9,7 @@
  *               as linear half floats (OpenEXR's C interface)
  *   Photoshop   the merged picture every .psd carries for programs that
  *               don't understand layers (read only, as on the Mac)
- *   HEIC        writing (libheif with x265); reading is libheif's GTK loader
+ *   HEIC        read and write (libheif; shared heif-pixbuf.c with My Files)
  *   TGA         writing (GTK reads it but can't write it)
  *
  * Everything comes in and goes out as 8-bit RGBA GdkPixbufs.
@@ -22,6 +22,7 @@
 #include <string.h>
 #include <tiffio.h>
 
+#include "../myos-heic/heif-pixbuf.h"
 #include "preview.h"
 
 #define ERR(err, ...) g_set_error(err, G_FILE_ERROR, G_FILE_ERROR_FAILED, __VA_ARGS__)
@@ -553,7 +554,12 @@ out:
     return p;
 }
 
-/* --- HEIC (writing) -------------------------------------------------------------------- */
+/* --- HEIC ------------------------------------------------------------------------------ */
+
+GdkPixbuf *codec_read_heic(const char *path, GError **err)
+{
+    return myos_heif_pixbuf_from_file(path, err);
+}
 
 gboolean codec_write_heic(GdkPixbuf *pix, const char *path, double quality, gboolean alpha,
                           GError **err)

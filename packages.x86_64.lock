@@ -1,7 +1,7 @@
 # packages.lock — written by tools/fetch-live.py --update; do not edit.
 # Every package on the live disk, in install order, with the SHA-256 of
 # its .apk. The build refuses any download that doesn't match.
-world 79b8f472bd513a7fa02a768e7b4fee6d5451c59a5d326755bb0639b492996fd2
+world 4e67419b93acadc4a1c403f7e4b67cf1f859225f826893cd413bd2a233300662
 # group      package                          version              repo       sha256
 base         alpine-baselayout-data           3.6.5-r0             main       a3da0d6c15fadda2ffd0dcb622c4b86cc21076114fce959acb2ea4ea2a0361a1
 base         musl                             1.2.5-r3             main       70705bdeb1a8d54ee1ec7ce3b06f176206f4f3b105d86cf5576d74b8277adfa0
@@ -89,6 +89,9 @@ init         libmd                            1.1.0-r0             main       83
 init         libbsd                           0.12.2-r0            main       8936afde94982d1152fab86d45e8ced56004ef9c21c78719b86c056a8b25769d
 init         shadow                           4.15.1-r0            community  c90cfd1e6847d232d710ecb2bba41eaa6c4b12184b3726982ec7681746ff9add
 init         doas                             6.8.2-r7             main       f125773d7547b8bd52d514fc17466b8d99bfa8d05b5a439e12dceada72c8e77a
+init         openssh-keygen                   9.7_p1-r5            main       f8c37676a019bbf98e796c5e50bc6f89e3cfbe3fd0ef8f15c9f0e166e2ab7a10
+init         openssh-server-common            9.7_p1-r5            main       c7755d7534b95fbdeb5b0800dc4932d9fa37c4309dd0aec261f53413395d7269
+init         openssh-server                   9.7_p1-r5            main       6642fe02ce9fadc27477c2e3472acc9dbbad64a62592ac451a0e505e13837250
 desktop      encodings                        1.0.7-r1             main       5425cb05fc1c357ea2f4162f60a8fcb23eaed794bf1f730a296ba7fbba19f78e
 desktop      font-alias                       1.0.5-r0             main       ac8002af50606f8191b41d4b1d1a48e97b8dc4e6933423c2ac0dbb5dbac29617
 desktop      libfontenc                       1.1.8-r0             main       412501608e05da75b25c167d6be0bb6e97331a999d1a18038ed6839517ee4fc8
@@ -186,34 +189,34 @@ desktop      libxaw                           1.0.16-r1            main       5c
 desktop      xterm                            391-r0               community  2f508c30eb3538a222bc7c1ddd1141134023a705e211c41e6e1a2bb2dc3cf428
 desktop      font-dejavu                      2.37-r5              main       f9a0651a6ff8256586466d31385a51953d37dadb3f8185685a1dce6f573100bf
 desktop      adwaita-icon-theme               46.0-r0              community  edea6622997ab26b31d6811121e4ebe76a9f9a4cd75e42e78dba5dfc6bc2bfaf
+desktop      hicolor-icon-theme               0.17-r2              main       3cfe284a63338c50e02129f38dbedb104567c4825695b93b8e20e6bc29da4e2c
+desktop      gtk-update-icon-cache            3.24.43-r0           main       885b9230eb67229452e8ba2f3fc6b46f30e450798dc927a39a1153ff5766351a
+desktop      libxcursor                       1.2.2-r1             main       3b8a0c5af084b8f26e60b47d71f3f87de4ea4c0a6aec371033d43bfde8b0539f
+desktop      libxi                            1.8.1-r4             main       999eaf2fd7c38339776357ea63f65502c8194a3fdb2100c925ee507a398dabdc
+desktop      libatk-1.0                       2.52.0-r0            main       04cf29f0523e8c859f8b4ea53de18e12c532aee9f9fffe71c36ad51424206247
+desktop      libxtst                          1.2.4-r6             main       8cd53b0b25a2571546be304835f5ac37816440aa53048934f40e6ee536de3f13
+desktop      dbus-libs                        1.14.10-r1           main       ba4536b7ed724517442eb4e01cf8758080e41abb03c14f9437ee50c4a048cfb8
+desktop      at-spi2-core                     2.52.0-r0            main       3786d31bfb2adc6116d09a1a62e730442468c5492705cc629a7d84a9aa6a832e
+desktop      libatk-bridge-2.0                2.52.0-r0            main       14c31ad7fd0e56f9930a57e0b279360c593e52895707b8532c327f825b3d9385
+desktop      avahi-libs                       0.8-r17              main       527d5b07c97696b773ee0dca35e0ec48bd3b6500bfb19179ed9a8b51d52bfb4d
+desktop      libunistring                     1.2-r0               main       b1fec29a087be9da51d2d1d4fc8ff3bcedccb13c6999a830630f313678843255
+desktop      libidn2                          2.3.7-r0             main       eebb14d01f7111da6d3b2df2a29cae4fc6672998b4059747dcdaffa8ec06b00c
+desktop      libtasn1                         4.21.0-r0            main       e560266e485f55dbe4046d8f0b28f94f7e8025ae5367a1107d27388c59759c88
+desktop      p11-kit                          0.25.3-r0            main       f805367a8a1137c46f2d5a6cddfdea693faf96136e8c187ecb1f1d8420f7d1d2
+desktop      gnutls                           3.8.13-r0            main       7d5c53980a1723d0c64d91499b8002550959c1ba5398c4b2fde470f4ebb62a06
+desktop      cups-libs                        2.4.18-r0            main       d2da22edc3a9c65830c4ffca4973e290861ac768f316e1cf2c05fcbd6c14d3fe
+desktop      wayland-libs-cursor              1.22.0-r4            main       83c3a0bf6622e1f05175b2e3544f5147a5cdf95c353e7fa24bb1395e32018c23
+desktop      wayland-libs-egl                 1.22.0-r4            main       2830bf23aa8a547770f040a0362e39180693e75109ec52df6adea33f3d9e86f8
+desktop      libxkbcommon                     1.7.0-r0             main       a6228f0ea3ad4cce033373c59cd375807e862ea46850e67167953fe6fe239578
+desktop      gtk+3.0                          3.24.43-r0           main       cb3a150ffdb1a7e18ad125757e044124ff4684f4658420fc2785ec43f4ea8383
 compositor   libconfig                        1.7.3-r3             main       eb87130b7c8c769399b23f29decd1130d44b01f77bf052fff09358dc690c5129
-compositor   dbus-libs                        1.14.10-r1           main       ba4536b7ed724517442eb4e01cf8758080e41abb03c14f9437ee50c4a048cfb8
 compositor   libev                            4.33-r1              main       6cccb29e1c271651e4d7f8ab57fbe5764f7eff10a87b70e45518a31db73d19f4
 compositor   pcre                             8.45-r3              main       998e0945061652386ad1a38fc2425513f4ddf47011b0d382f5c802190f1c53e1
 compositor   xcb-util                         0.4.1-r3             main       646295bb8fcbdc2404c91409409fe3517387bddbb62103bd0bc2f5cf1705f570
 compositor   xcb-util-image                   0.4.1-r0             community  20653ebe6c46a0457693d758691da124d3f602c81ce520494bd5c3472b9c43b5
 compositor   xcb-util-renderutil              0.3.10-r0            community  5bf18f03afa30d4cbef08023d27803b1cbe584100e904e1cac7dd67cf9046319
 compositor   picom                            10.2-r1              community  b9b3a05801c620466b2ed96bb25e8debd588d9b76275da24ee9dfb126b33485f
-office       libatk-1.0                       2.52.0-r0            main       04cf29f0523e8c859f8b4ea53de18e12c532aee9f9fffe71c36ad51424206247
 office       enchant2-libs                    2.7.3-r0             community  9a6240c99ba980a2cf16d0e56feabb65f73b7b0b0ad21e3accb34fed76a8eb64
-office       hicolor-icon-theme               0.17-r2              main       3cfe284a63338c50e02129f38dbedb104567c4825695b93b8e20e6bc29da4e2c
-office       gtk-update-icon-cache            3.24.43-r0           main       885b9230eb67229452e8ba2f3fc6b46f30e450798dc927a39a1153ff5766351a
-office       libxcursor                       1.2.2-r1             main       3b8a0c5af084b8f26e60b47d71f3f87de4ea4c0a6aec371033d43bfde8b0539f
-office       libxi                            1.8.1-r4             main       999eaf2fd7c38339776357ea63f65502c8194a3fdb2100c925ee507a398dabdc
-office       libxtst                          1.2.4-r6             main       8cd53b0b25a2571546be304835f5ac37816440aa53048934f40e6ee536de3f13
-office       at-spi2-core                     2.52.0-r0            main       3786d31bfb2adc6116d09a1a62e730442468c5492705cc629a7d84a9aa6a832e
-office       libatk-bridge-2.0                2.52.0-r0            main       14c31ad7fd0e56f9930a57e0b279360c593e52895707b8532c327f825b3d9385
-office       avahi-libs                       0.8-r17              main       527d5b07c97696b773ee0dca35e0ec48bd3b6500bfb19179ed9a8b51d52bfb4d
-office       libunistring                     1.2-r0               main       b1fec29a087be9da51d2d1d4fc8ff3bcedccb13c6999a830630f313678843255
-office       libidn2                          2.3.7-r0             main       eebb14d01f7111da6d3b2df2a29cae4fc6672998b4059747dcdaffa8ec06b00c
-office       libtasn1                         4.21.0-r0            main       e560266e485f55dbe4046d8f0b28f94f7e8025ae5367a1107d27388c59759c88
-office       p11-kit                          0.25.3-r0            main       f805367a8a1137c46f2d5a6cddfdea693faf96136e8c187ecb1f1d8420f7d1d2
-office       gnutls                           3.8.13-r0            main       7d5c53980a1723d0c64d91499b8002550959c1ba5398c4b2fde470f4ebb62a06
-office       cups-libs                        2.4.18-r0            main       d2da22edc3a9c65830c4ffca4973e290861ac768f316e1cf2c05fcbd6c14d3fe
-office       wayland-libs-cursor              1.22.0-r4            main       83c3a0bf6622e1f05175b2e3544f5147a5cdf95c353e7fa24bb1395e32018c23
-office       wayland-libs-egl                 1.22.0-r4            main       2830bf23aa8a547770f040a0362e39180693e75109ec52df6adea33f3d9e86f8
-office       libxkbcommon                     1.7.0-r0             main       a6228f0ea3ad4cce033373c59cd375807e862ea46850e67167953fe6fe239578
-office       gtk+3.0                          3.24.43-r0           main       cb3a150ffdb1a7e18ad125757e044124ff4684f4658420fc2785ec43f4ea8383
 office       libgsf                           1.14.52-r0           community  99866242e08221ad02afa0c8a6cad1759284a5b6307025398ea01628b8ce86e3
 office       libgpg-error                     1.49-r0              main       b97c14938f9381eb282b95f70718497c340f52ae057e08d98e4eda16925c816b
 office       libgcrypt                        1.10.3-r0            main       e1cd714dc919267d88272a7df7e2e9d6994442cb74f8b708725aec34eca05e4a
@@ -362,6 +365,7 @@ browser      libltdl                          2.4.7-r3             main       64
 browser      tdb-libs                         1.4.9-r1             main       9b572e4c92cae716c3e06cf7c6f022a1fa769abcdec4b3f3faaf09e8acdaf537
 browser      libpulse                         17.0-r0              community  042118968f363def748d5b3623a1bc4274c8fdc508f8f5899968b6da11137880
 browser      chromium                         131.0.6778.108-r0    community  45cbafb9544d7f29582974805f20eccc4e6633b78a0f35ee68dd1f899f3310ad
+www          darkhttpd                        1.16-r0              main       d900ad5a9b0449242c4d45ff624d803cea3feb3de0d2fdfe6bc294e234129c72
 dev          make                             4.4.1-r2             main       79d91d6860b20f3a95a8a8c3ad837343ec6c0dd6874a42ab6f44098311744cd9
 dev          jansson                          2.14-r4              main       475260d29922e9de90cfc31a2dff36b43d89d54adf6328d8d445bedf362a71e7
 dev          binutils                         2.42-r1              main       95ff0ecfed3ca185bf7e04f15abc36b6c23d5645b0b8d1f7ab56e4bee425ec64
@@ -369,7 +373,9 @@ dev          isl26                            0.26-r1              main       94
 dev          mpfr4                            4.2.1-r0             main       8ffac292b300ffcd29ae88ea9919d49130d04394be8f4919da95f2ec861b9a81
 dev          mpc1                             1.3.1-r1             main       f27ed38b9d58dd4aef9fe239c8cd5943701a1f839a2baee13d1bebd36a727503
 dev          gcc                              13.2.1_git20240309-r1 main       f3c6095905cbe31d77ac7e3ba3397058b952751d0dd6b0511e8baa464ef0fa99
+dev          libstdc++-dev                    13.2.1_git20240309-r1 main       43ddab11bd74e11f12b741e5c77dc2a1ad897d59653398ddf19e03fc9018d762
 dev          musl-dev                         1.2.5-r3             main       36abcf8a199826080b9b2a45f86782afae4ae5c8b8331909e5113911e2bdcad1
+dev          g++                              13.2.1_git20240309-r1 main       d249b40a396675b592b3997c631e4d6b520d75d9cadfd3b63707406ecdad6cad
 dev          musl-dbg                         1.2.5-r3             main       40ff88dd99184bbbd8bb3c0ceedbfc41d43718f4026125b8dd487e22a9ae1589
 dev          gdbm                             1.23-r1              main       664869bd7b4c49112300f7b6685c49b75a7ceefc18710390ee7cb7d1b91361b5
 dev          mpdecimal                        4.0.0-r0             main       3c6b10d2a7e61d6da6c887d0036c25673aaa5a4c21c96209d14e34f9be2c7384
@@ -380,6 +386,11 @@ dev          musl-fts                         1.2.7-r6             main       df
 dev          libdw                            0.191-r0             main       475f4d08d64d9006c1d07daad21373061cc3c9e0d62e4b819d55acc81cd314ca
 dev          strace                           6.9-r0               main       04773123c9ca1ee3a94d12f05a10c0e2a7fb090efc56385830c7abbc8ea6f204
 dev          git                              2.45.4-r0            main       e2d9d05bf6a3b7642534e174a7fe400269b217983f87784b473e2211c970fdfc
+dev          python3-dev                      3.12.13-r0           main       a12ef249ee116ddbf0515b3280e5490d529bab8022853c31cd0932390bd3d78a
+dev          py3-parsing                      3.1.2-r1             main       19ed4f56842a1e47e8d9627fdcaf68c96405ea4ab83540ae2e6d5cd087b8db30
+dev          py3-packaging                    24.0-r1              main       fd8c87e6f268c53b77d816d9b49efab8d8725fdaaf8beb99234f76fe37c05b32
+dev          py3-setuptools                   70.3.0-r0            main       7670d0df4ad3382df283c16a9891deb7ba72c4366deecc68a3b4f02320b0b2cc
+dev          py3-pip                          24.0-r2              community  ee027cf7738aef939bfdaff58d8617012384629642a89daccdd0c0003c2ab77b
 dev          abseil-cpp-log-internal-nullguard 20230802.1-r0        main       d32fe2bf062f88f858fa77d6ca892ad855447b1c01a45ad653007bc5df15a93d
 dev          abseil-cpp-raw-logging-internal  20230802.1-r0        main       3a92e461dcea3185f7603fc36311f790fbfecde3b9034a44342579dfb35bab96
 dev          abseil-cpp-strings-internal      20230802.1-r0        main       01c4f347fb205e73964868a4d3f41e4ddce2dd54ff7721cb7e5c412ed2895aed
@@ -441,7 +452,6 @@ dev          curl                             8.14.1-r2            main       a9
 dev          popt                             1.19-r3              main       51cee2f028e61d1b020a70da44ae36bb28b4a8f0edc0b47fba45de783976b0fb
 dev          libxxhash                        0.8.2-r2             main       57bafa0e4c466a1fe439d03a260ea0667585cc737a1e945193b370bd8740619e
 dev          rsync                            3.4.3-r0             main       8a3a54528b910884551a13280375e94cd7a944fa927ca42c8e6acd519a4a8a44
-dev          openssh-keygen                   9.7_p1-r5            main       f8c37676a019bbf98e796c5e50bc6f89e3cfbe3fd0ef8f15c9f0e166e2ab7a10
 dev          libedit                          20240517.3.1-r0      main       d430e6602f8b6671d38808c6b14ede281e904f7a08c2d09b34aecd6f1af382b0
 dev          openssh-client-common            9.7_p1-r5            main       37180b9275ce6214d5047b7c3c7f4aabba8bd12bab42f55bb3bc188ffe9deded
 dev          openssh-client-default           9.7_p1-r5            main       0d752c19ffcb9ce6345f8acaabb2c2a766fcb0e1f81a0d0fdc873daf782045bb
@@ -475,6 +485,13 @@ dev          sqlite-dev                       3.45.3-r3            main       c7
 dev          util-linux-dev                   2.40.1-r1            main       6488d81cdad8f0cd22a3d7681969e562425595fbde0587cd41e51a343d8f4f1e
 dev          libsm-dev                        1.2.4-r4             main       e552b71a14aa332e5ba3d3529542855ecf3c979eb951a4780c8927c12cfa03b0
 dev          imlib2-dev                       1.12.2-r0            main       82d99b3c06aad2a312905252b4b7ec8aa680427c56bbc71686a690035ba3ee95
+dev          java-common                      0.5-r0               community  f4b5de4da25453b1a019992d462d8d860aa7523dd334184abd55a205a12718c9
+dev          p11-kit-trust                    0.25.3-r0            main       fa741ce2511df32ce7719d4e88429826d3c3e484a409cf571f8871db68fe9807
+dev          java-cacerts                     1.0-r1               community  7ffa97611ea2cda6d6273a9f5bec8b0348bd99dde47df7bd451d26802625c862
+dev          openjdk17-jre-headless           17.0.16_p8-r0        community  8d39c802d2291fb36365ff95d008a52c6f93244bfb738196a74f8a82dc9ddbeb
+dev          openjdk17-jre                    17.0.16_p8-r0        community  aaee83b5ef4bd0f45ea5457d53e5d5282337daf33cc0adc7bb466744f7a01b4d
+dev          openjdk17-jmods                  17.0.16_p8-r0        community  5410677bcd4f25e187fb9a78e9495d6f5655c4199e582731cf305a2924c4601d
+dev          openjdk17-jdk                    17.0.16_p8-r0        community  63e46a02cfdc36add14c26bfbb8b1028c64088a0ec316a2adbbeedef55a06054
 docs         mandoc                           1.14.6-r13           main       6d9b1356489132e6ccf0aa77edd890424a9efdaea389dc10ed6adf6afba723f7
 docs         mandoc-doc                       1.14.6-r13           main       472127422f1978d14be223cd1471fc9f07936cd508e77e901b972a232bb43bd7
 docs         man-pages                        6.8-r0               main       df9f0ee0302f55f747a11d19f18fb1729e724ee2dcba2ff592d5e8ce45951127
@@ -529,8 +546,6 @@ build-only   tiff-dev                         4.6.0t-r0            main       35
 build-only   openjpeg-dev                     2.5.2-r0             main       fda8316d2c49db8c7c43d0bbb5ba972633310498c42ff2f9304c209aa1caf918
 build-only   libheif-dev                      1.17.6-r1            community  33cab65fbbe240cbd3dfd0af65d8313b200e40e7cd43fe6ba7822fc427b1bcb5
 build-only   openexr-dev                      3.1.13-r1            community  071a5df0351d79c54333045419a2430f2554e34fd50e824a047c895913470fcf
-build-only   g++                              13.2.1_git20240309-r1 main       d249b40a396675b592b3997c631e4d6b520d75d9cadfd3b63707406ecdad6cad
-build-only   libstdc++-dev                    13.2.1_git20240309-r1 main       43ddab11bd74e11f12b741e5c77dc2a1ad897d59653398ddf19e03fc9018d762
 build-only   ncurses-dev                      6.4_p20240420-r2     main       0625208a0ad7ef0bd4c5d81f741321a24d77724a64ae6a6211de02fa5f2de4b2
 build-only   libxml2-dev                      2.12.10-r0           main       44df59d0b839df44e20dd979908817d1e78c5aba734c1a4829d1ef91c27f221f
 build-only   pcre2-dev                        10.43-r0             main       c6198360f5693bd28784dda4bc34c84ea65a46441ad1d0d26b22ed6af4269878
@@ -538,6 +553,11 @@ build-only   icu-dev                          74.2-r1              main       57
 build-only   webkit2gtk-4.1-dev               2.44.1-r1            community  5f30f0e3bab0bb06191a3e9a3cad2ecdcfbc214a66d43e94719d8c800a50bbc3
 build-only   libsoup3-dev                     3.4.4-r0             community  9f1321c9e913cb75f6e352ff728fa3e969ab0afa36a32d3a8d551ed9339e856c
 build-only   librsvg-dev                      2.58.5-r0            community  45c1a085575bd67596360a6b565a36d2b7230d78e2bdbf9b60732955cedcf57c
+wifi         libnl3                           3.9.0-r1             main       139dabb4fe0bad81d7285316361ade8cea633067ca8fde9f3bdf9f50d59122bf
+wifi         pcsc-lite-libs                   2.2.3-r0             main       069be1a1b0f619fd2820d10d1a60caefc432867c5957cbbf2a8d8679b05683e2
+wifi         wpa_supplicant                   2.10-r11             main       e97082196c401a54e14a0484916f86b75e8111882551301f30599eb3be0db710
+wifi         iw                               6.9-r0               main       ea78e641ea622ff64ad4b6178faef673aae93a299b778d42677136b46b092cb5
+wifi         wireless-regdb                   2024.05.08-r0        main       f6fde7bea364fa5fe8d77102a4561e84f0e737b1afb6f8d6c5989dbc5c76bc68
 dev          android-tools-bash-completion    35.0.1-r3            community  6a1503651f2f26af1d18155a523ef89f1b3511e7f3c546dc4d01dc4aeb991d7e
 base         blkid                            2.40.1-r1            main       26be26709fba19870c7bcfa1283f482f36817a8e495fa9065107105d1e17e61e
 office       bubblewrap-bash-completion       0.10.0-r0            main       091250fcb6565ccc994359ff6e9e9025dbbb8e3d121b631a7dbd44f344903a52
@@ -556,6 +576,7 @@ base         logger                           2.40.1-r1            main       7d
 base         losetup                          2.40.1-r1            main       279c31cf24fb20c2332ff5492d136230712cd0277ce8a093e64afec91da62e08
 base         lsblk                            2.40.1-r1            main       9e23cba696d3256fa6706d3d36ffd3bce27538358c65207a8298dd28038adbf0
 base         partx                            2.40.1-r1            main       4e9a1d9aba1e49ef442270d42f901eadf86494fdb0b9d60cde548d3b4c359473
+dev          py3-pip-bash-completion          24.0-r2              community  e3dc8ef81377879907d36b8689e3d5d6096d1425efb69ee1b2f20583d1792149
 dev          python3-pycache-pyc0             3.12.13-r0           main       c662e43c95c1cd769f6c0e33a3f9bda348c9bc1f8d6c132ad9761d332e129bb8
 dev          pyc                              3.12.13-r0           main       10659c3425987f5cddba32940221085afa9edc668ff837f2e7cdcf0c67f604b2
 dev          python3-pyc                      3.12.13-r0           main       9a1b7a6d82d5d826665e80e5173a74a825e8464ba26629da8a9c57f53da832ae
@@ -565,4 +586,8 @@ base         sfdisk                           2.40.1-r1            main       d9
 base         util-linux-bash-completion       2.40.1-r1            main       5066cf05528286266bb3ba260eb8516884e46cc6a2fb8cdd3f23ac591827e2c0
 base         uuidgen                          2.40.1-r1            main       8f28d6362a72fab6d5c3b4beda3c70cd282b4e78b17403264587b7d0eb85d620
 base         wipefs                           2.40.1-r1            main       613ac8c722734976313052373997ce025da3812def19b74f70f20aa5f7c46f14
+dev          py3-packaging-pyc                24.0-r1              main       028b63050affe491c1005d73e62bfc38b26be445f711d98e002500057daee80d
+dev          py3-parsing-pyc                  3.1.2-r1             main       cf18fc35155021a9b92fd3593ea01e28ff1848de191bc0b545f5f56737ddb4d3
+dev          py3-pip-pyc                      24.0-r2              community  1b05576a0fde750d3d6bde71a1444f52d080b191e495839ff70c061a8bd7321a
+dev          py3-setuptools-pyc               70.3.0-r0            main       ee48dec1369e17de7c933f42e25d57a8138f8063876cab1dd66cb1e78f86e852
 dev          xcb-proto-pyc                    1.16.0-r1            main       08aa92fc96af4ff4d4eff4de4521835484f7c7aa7a14b42851276ff33245521e

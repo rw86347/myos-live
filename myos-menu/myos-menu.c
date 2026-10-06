@@ -18,7 +18,9 @@
  *     own KeySysMenu and Win95Keys are switched off in its preferences).
  *
  * It also draws the theme's hot corner, the curl at the top right of the
- * desktop (see "the hot corner" below).
+ * desktop (see "the hot corner" below), and is the tray's notification
+ * area: the Wi-Fi icon (myos-wifi) docks there, where the mockup has its
+ * network icon (see "the notification area" below).
  *
  * Everything you see is drawn at build time by live/theme/make-live-theme.py
  * from the theme's design, into /usr/share/myos/menu/<scale>: the whole
@@ -99,6 +101,11 @@ static struct item items[MAX_ITEMS];
 static int nitems;
 static int name_x, name_y, name_size, type_size = 13;
 static int clock_x, clock_y, clock_size;   /* where the time sits in the tray */
+static int slot_x, slot_y, slot_size;      /* where a docked icon sits in the tray */
+static Atom a_tray_sel, a_tray_opcode, a_xembed;   /* (the notification area) */
+static Window tray_owner;           /* holds the tray selection; dock requests come to it */
+static Window icon_win;             /* the docked icon (it stays ours if the bar restarts) */
+static void redraw_icon(void);
 static time_t tray_minute;                 /* the minute currently drawn; 0 none */
 static struct rect run_box, run_ok, run_cancel, run_close;
 static char user[64];
@@ -280,6 +287,11 @@ static void read_conf(void)
             if (sscanf(rest, "%d %d %d", &x, &y, &sz) == 3)
                 clock_x = x, clock_y = y, clock_size = sz;
         }
+        else if (!strcmp(key, "icon")) {
+            int x, y, sz;
+            if (sscanf(rest, "%d %d %d", &x, &y, &sz) == 3)
+                slot_x = x, slot_y = y, slot_size = sz;
+        }
         else if (!strcmp(key, "name") && nr >= 3)
             name_x = r.x, name_y = r.y, name_size = r.w;
         else if (!strcmp(key, "typesize") && nr >= 1)
@@ -387,6 +399,8 @@ static void next_event(XEvent *ev)
         return;
     if (ev->xdestroywindow.window == start_win)
         start_win = 0;
+    if (ev->xdestroywindow.window == icon_win)
+        icon_win = 0;               /* its program quit */
     if (ev->xdestroywindow.window == tray_win || ev->xdestroywindow.window == tray_frame) {
         tray_win = 0;
         tray_frame = 0;
@@ -583,11 +597,90 @@ static void paint_tray(void)
     if (tray_win) {
         XSetWindowBackgroundPixmap(dpy, tray_win, pm);
         XClearWindow(dpy, tray_win);
+        redraw_icon();
         XFlush(dpy);
     }
     if (tray_bg)
         XFreePixmap(dpy, tray_bg);
     tray_bg = pm;
+}
+
+/* --- the notification area -------------------------------------------------------- */
+
+/* Programs show icons in the tray the way they do on every Linux desktop,
+   freedesktop.org's "system tray" protocol: the tray owns the selection
+   _NET_SYSTEM_TRAY_S0 and says so; a program asks to dock with a message
+   naming its icon's window, and the tray takes that window in as a child
+   (XEmbed) — ours goes where the mockup draws its network icon. One slot:
+   the Wi-Fi icon is the one program that docks. The icon's background is
+   ParentRelative (GTK's choice when the tray has no alpha visual), so it
+   shows our picture through, and is told to redraw when the picture does.
+   IceWM's own tray is off (TaskBarEnableSystemTray=0), or it would hold
+   the selection first. */
+#define DOCK_REQUEST 0              /* SYSTEM_TRAY_REQUEST_DOCK */
+#define XEMBED_EMBEDDED_NOTIFY 0
+
+static void redraw_icon(void)
+{
+    if (icon_win)
+        XClearArea(dpy, icon_win, 0, 0, 0, 0, True);
+}
+
+/* Become the tray, unless something else already is. */
+static void own_tray(void)
+{
+    if (!slot_size)
+        return;                     /* (a theme without a slot) */
+    char name[32];
+    snprintf(name, sizeof name, "_NET_SYSTEM_TRAY_S%d", screen);
+    a_tray_sel = XInternAtom(dpy, name, False);
+    a_tray_opcode = XInternAtom(dpy, "_NET_SYSTEM_TRAY_OPCODE", False);
+    a_xembed = XInternAtom(dpy, "_XEMBED", False);
+    if (XGetSelectionOwner(dpy, a_tray_sel) != None)
+        return;
+    tray_owner = XCreateSimpleWindow(dpy, root, -1, -1, 1, 1, 0, 0, 0);
+    long horizontal = 0;
+    XChangeProperty(dpy, tray_owner, XInternAtom(dpy, "_NET_SYSTEM_TRAY_ORIENTATION", False), XA_CARDINAL,
+                    32, PropModeReplace, (unsigned char *)&horizontal, 1);
+    XSetSelectionOwner(dpy, a_tray_sel, tray_owner, CurrentTime);
+    if (XGetSelectionOwner(dpy, a_tray_sel) != tray_owner) {
+        XDestroyWindow(dpy, tray_owner);
+        tray_owner = 0;
+        return;
+    }
+    /* "There is a tray now": programs already waiting for one dock. */
+    XClientMessageEvent m = { .type = ClientMessage, .window = root, .format = 32,
+                              .message_type = XInternAtom(dpy, "MANAGER", False) };
+    m.data.l[0] = CurrentTime;
+    m.data.l[1] = (long)a_tray_sel;
+    m.data.l[2] = (long)tray_owner;
+    XSendEvent(dpy, root, False, StructureNotifyMask, (XEvent *)&m);
+}
+
+/* Put the icon in its slot, if the tray is up (else when it comes). */
+static void embed_icon(void)
+{
+    if (!icon_win || !tray_win)
+        return;
+    XReparentWindow(dpy, icon_win, tray_win, slot_x, slot_y);
+    XResizeWindow(dpy, icon_win, (unsigned)slot_size, (unsigned)slot_size);
+    XClientMessageEvent m = { .type = ClientMessage, .window = icon_win, .format = 32,
+                              .message_type = a_xembed };
+    m.data.l[0] = CurrentTime;
+    m.data.l[1] = XEMBED_EMBEDDED_NOTIFY;
+    m.data.l[3] = (long)tray_win;
+    XSendEvent(dpy, icon_win, False, NoEventMask, (XEvent *)&m);
+    XMapRaised(dpy, icon_win);
+}
+
+static void dock(Window w)
+{
+    if (icon_win && icon_win != w)
+        return;                     /* the slot is taken */
+    icon_win = w;
+    XSelectInput(dpy, w, StructureNotifyMask);
+    XAddToSaveSet(dpy, w);          /* if we go, it goes back to the root, not away */
+    embed_icon();
 }
 
 /* The window that contains w, or 0. */
@@ -703,10 +796,13 @@ static void attach_tray(void)
         x = 0;
     if (y < 0)
         y = 0;
-    XSetWindowAttributes a = { .background_pixmap = tray_bg,
+    /* Override-redirect: the taskbar passes its children's map requests to
+       IceWM (substructure redirect), and IceWM ignores one for a window it
+       didn't make, so ours would never show. */
+    XSetWindowAttributes a = { .background_pixmap = tray_bg, .override_redirect = True,
                                .event_mask = StructureNotifyMask | ButtonPressMask };
     tray_win = XCreateWindow(dpy, tray_frame, x, y, tray_pic.w, tray_pic.h, 0, depth, InputOutput, vis,
-                             CWBackPixmap | CWEventMask, &a);
+                             CWBackPixmap | CWOverrideRedirect | CWEventMask, &a);
     if (!tray_win) {
         tray_frame = 0;
         return;
@@ -719,7 +815,9 @@ static void attach_tray(void)
     if (!XGetWindowAttributes(dpy, tray_win, &wa)) {
         tray_win = 0;
         tray_frame = 0;
+        return;
     }
+    embed_icon();                   /* one that docked before the bar was there */
 }
 
 /* Redraw when the minute changes. */
@@ -994,6 +1092,7 @@ int main(int argc, char **argv)
     grab_key(XK_Super_L, 0);
     grab_key(XK_Super_R, 0);
     make_corner();
+    own_tray();
 
     int fd = ConnectionNumber(dpy);
     for (;;) {
@@ -1081,6 +1180,15 @@ int main(int argc, char **argv)
         case KeyPress:
             if (opens_menu(&ev.xkey))
                 open_menu();
+            break;
+        case ClientMessage:
+            if (ev.xclient.window == tray_owner && ev.xclient.message_type == a_tray_opcode &&
+                ev.xclient.data.l[1] == DOCK_REQUEST)
+                dock((Window)ev.xclient.data.l[2]);
+            break;
+        case SelectionClear:
+            if (ev.xselectionclear.selection == a_tray_sel)
+                tray_owner = 0;     /* another tray took over */
             break;
         }
     }

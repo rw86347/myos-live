@@ -1,0 +1,12 @@
+#!/bin/sh
+# runit runs this each time myos-login exits ($1: its exit code, -1 if a
+# signal killed it). After a logout (0) there is nothing to say. Otherwise
+# put the X server's errors on the screen — a laptop has no serial port to
+# read them from — and wait a little before runit tries again.
+[ "$1" = 0 ] && exit 0
+{
+    echo "myos-login stopped (exit code $1). The X server's errors:"
+    grep -E '\(EE\)|Fatal' /var/log/Xorg.0.log 2>/dev/null | grep -v 'warning, (EE)' | tail -n 15
+    echo "Trying again in 10 seconds."
+} > /dev/console 2>&1
+sleep 10

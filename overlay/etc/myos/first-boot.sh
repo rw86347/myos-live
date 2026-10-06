@@ -1,6 +1,10 @@
 #!/bin/sh
 # first-boot.sh — finish the install on MyOS's first boot (run by
 # /etc/runit/1), doing what tools/fetch-live.py could not do on the Mac:
+#
+# KERNEL GAP (x86_64): Alpine install scripts need copy_file_range (326) and
+# vfork (190); stage 1 mounts need fsopen/fsmount (430+). See
+# docs/x86_64-LIVE-HANDOFF.md — not fixable in this script alone.
 # Alpine's install scripts, in install order, the way apk runs them — from
 # /, with /bin/sh; a pre-/post-install script gets the package version, a
 # trigger the folders its patterns match (and doesn't run if none exist) —

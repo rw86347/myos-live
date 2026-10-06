@@ -3,8 +3,9 @@
  *
  * Opening looks at the file's first bytes, not its name: PDF goes to
  * poppler; TIFF, JPEG 2000, OpenEXR and Photoshop to codecs.c; animated
- * GIFs become one page per frame; everything else to GTK's image loaders
- * (PNG, JPEG, HEIC, AVIF, JPEG XL, WebP, BMP, ICO, ICNS, TGA, PNM, XBM,
+ * GIFs become one page per frame; HEIC/HEIF/AVIF to libheif (heif-pixbuf.c);
+ * everything else to GTK's image loaders (PNG, JPEG, JPEG XL, WebP, BMP, ICO,
+ * ICNS, TGA, PNM, XBM,
  * XPM, SVG, camera RAW).
  *
  * Saving a PDF is done in up to three passes, each by the tool that does
@@ -26,6 +27,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "../myos-heic/heif-pixbuf.h"
 #include "preview.h"
 
 #define ERR(err, ...) g_set_error(err, G_FILE_ERROR, G_FILE_ERROR_FAILED, __VA_ARGS__)
@@ -462,6 +464,8 @@ struct doc *doc_open(const char *path, const char *password, GError **err)
             one = codec_read_exr(path, err), fmt = "exr";
         } else if (n >= 4 && !memcmp(head, "8BPS", 4)) {
             one = codec_read_psd(path, err), fmt = "psd";
+        } else if (myos_heif_sniff(head, n) || myos_heif_path(path)) {
+            one = codec_read_heic(path, err), fmt = "heif";
         } else if (n >= 4 && !memcmp(head, "GIF8", 4)) {
             gchar *buf;
             gsize len;

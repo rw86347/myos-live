@@ -1,0 +1,7 @@
+#!/bin/sh
+# darkhttpd: static files from /var/www/html, port 80.
+# This service is not linked in /etc/runit/runsvdir/default; enable with
+#   doas myos-httpd enable
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+mkdir -p /var/www/html
+exec darkhttpd /var/www/html --port 80 --chroot --uid nobody --gid nobody

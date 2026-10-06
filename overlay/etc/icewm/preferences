@@ -38,6 +38,7 @@ TaskBarShowCPUStatus=0
 TaskBarShowMEMStatus=0
 TaskBarShowNetStatus=0
 TaskBarShowAPMStatus=0
+TaskBarEnableSystemTray=0   # myos-menu is the tray: icons dock in its picture
 TaskBarClockLeds=0
 TimeFormat="%I:%M %p"       # musl's strftime has no %l (hour, no zero)
 

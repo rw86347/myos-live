@@ -2,4 +2,12 @@
 # The graphical login screen: myos-login starts the X server, shows the
 # Golden Hour login, and runs /etc/myos/xsession as whoever logs in. When
 # the session ends it exits and runit starts it again, with a fresh server.
+# (A laptop has no serial port: say on the screen what happens next.)
+# A kernel built with CMDLINE=nodesktop: no X, so the text console shows
+# what happens (debugging on a machine with no serial port). Log in there.
+if grep -qw nodesktop /proc/cmdline 2>/dev/null; then
+    echo "myos-login: nodesktop: no X; log in on this console" > /dev/console
+    exec sleep 2147483647
+fi
+echo "myos-login: starting the X server and the login screen" > /dev/console
 exec myos-login

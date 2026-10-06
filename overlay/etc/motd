@@ -1,6 +1,15 @@
 Welcome to MyOS (live disk).
 
-The programs are Alpine Linux's (musl, i686), running unchanged on the
+The programs are Alpine Linux's (musl), running unchanged on the
 MyOS kernel. You are "myos", in group wheel: use doas for root.
 Work in progress: much is still missing. Shut down with: doas poweroff
+
+ssh is installed (client and server). The live account has no password:
+`passwd` before you expect a remote login. Root is not allowed over ssh.
+The kernel does not yet listen on TCP, so sshd cannot accept a connection
+until that lands (docs/gaps.md). The client can still reach another host.
+
+A static web server (darkhttpd, /var/www/html, port 80) is installed and
+off. Start it with: doas myos-httpd enable
+(same listen/accept gap until the kernel has it).
 

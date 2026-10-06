@@ -5,7 +5,7 @@
 # One tree: do not copy packages.txt. Same group names append; a leading
 # "!" drops a package the 32-bit disk still wants.
 #
-# There is no packages.x86_64.lock yet. First fetch:
+# Pins: live/packages.x86_64.lock. Refresh:
 #   python3 tools/fetch-live.py --arch x86_64 --update
 #
 # Chromium has no i386 Alpine package. Firefox stays on the 32-bit disk
@@ -14,6 +14,21 @@
 # tree. Optional x64-only files go in live/overlay.x86_64/.
 
 !firefox
+# 32-bit live disk has OpenJDK 8; 64-bit gets a current LTS instead.
+!openjdk8
 
 [browser]
 chromium
+
+[dev]
+openjdk17-jdk
+
+[wifi]
+# Wi-Fi (docs/WIFI-PLAN.md W5): wpa_supplicant joins networks (WPA2, the
+# 4-way handshake) and takes orders from the tray icon (live/myos-wifi);
+# iw shows and drives the radio by hand; wireless-regdb is the table of
+# what each country allows. The kernel has the driver (iwlwifi) and its
+# own DHCP client. In the RAM login image too (LOGIN_GROUPS).
+wpa_supplicant
+iw
+wireless-regdb

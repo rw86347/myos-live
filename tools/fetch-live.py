@@ -4,6 +4,11 @@
     tools/fetch-live.py            build from live/packages.lock (exact files)
     tools/fetch-live.py --update   re-resolve live/packages.txt against Alpine's
                                    index and write a new lock file
+    tools/fetch-live.py --add      the same, but every package already in the
+                                   lock keeps its pinned version (it may move
+                                   to another group): only what was added to
+                                   the list (and the libraries it brings) is
+                                   resolved, downloaded, pinned
     tools/fetch-live.py --sysroot  only unpack the packages' headers and
                                    libraries into build/live/sysroot, to
                                    cross-compile MyOS's own programs against
@@ -11,6 +16,11 @@
                                    a smaller archive (base+init+desktop+compositor)
                                    for the live UEFI RAM boot, when USB storage
                                    is not in the kernel yet
+    LIVE_STALE_LOCK=1 tools/fetch-live.py ...
+                                   build from the lock even though packages.txt
+                                   changed since: packages added to the list
+                                   are left out (listed as a warning). For a
+                                   test image before an --update is possible.
     tools/fetch-live.py --arch x86|x86_64
                                    Alpine architecture. Default x86 (i386).
                                    x86_64 merges live/packages.x86_64.txt on
@@ -71,7 +81,7 @@ WORLD_FILES = [WORLD]
 ARCH_ALIASES = {"i386": "x86", "x86": "x86", "x86_64": "x86_64", "amd64": "x86_64"}
 # RAM login (live UEFI when the USB ext2 root is invisible): enough to
 # start X and myos-login. Office, Firefox, gcc and the source stay on disk.
-LOGIN_GROUPS = frozenset({"base", "init", "desktop", "compositor"})
+LOGIN_GROUPS = frozenset({"base", "init", "desktop", "compositor", "wifi"})
 LOGIN_EXTRA_SKIP = ("usr/share/writeperfect", "usr/lib/writeperfect")
 
 BRANCH = "v3.20"
@@ -87,7 +97,7 @@ BUILD_ONLY = "build-only"
 # The live disk's user: no password (PAM's nullok lets an empty one in), in
 # wheel so `doas` works. The installer must ask for a real password.
 LIVE_USER = dict(name="myos", uid=1000, gecos="MyOS user", shell="/bin/bash",
-                 groups=["wheel", "audio", "video", "input"])
+                 groups=["wheel", "audio", "video", "input", "netdev"])
 KEEP = ("etc/passwd", "etc/group", "etc/shadow")   # Root keeps a copy of these
 
 
@@ -350,7 +360,7 @@ def write_lock(entries):
             f.write(f"{e['group']:<12} {e['name']:<32} {e['version']:<20} {e['repo']:<10} {e['sha']}\n")
 
 
-def read_lock():
+def read_lock(stale_ok=False):
     if not os.path.exists(LOCK):
         die(f"no {os.path.relpath(LOCK, ROOT)} yet: "
             "run tools/fetch-live.py --arch "
@@ -364,9 +374,13 @@ def read_lock():
             world = f[1]
             continue
         entries.append(dict(group=f[0], name=f[1], version=f[2], repo=f[3], sha=f[4]))
-    if world != world_hash():
-        die(f"{os.path.relpath(WORLD_FILES[0], ROOT)} changed since the lock "
-            "was written: run tools/fetch-live.py --update")
+    if world != world_hash() and not stale_ok:
+        if os.environ.get("LIVE_STALE_LOCK") != "1":
+            die(f"{os.path.relpath(WORLD_FILES[0], ROOT)} changed since the lock "
+                "was written: run tools/fetch-live.py --update "
+                "(or LIVE_STALE_LOCK=1 to build without the new packages)")
+        print(f"fetch-live: WARNING: {os.path.relpath(WORLD_FILES[0], ROOT)} changed "
+              "since the lock was written; building from the lock as it is")
     return entries
 
 
@@ -710,17 +724,27 @@ def mib(n):
 def main():
     alpine_arch, argv = parse_arch(sys.argv[1:])
     configure(alpine_arch)
-    update = "--update" in argv
+    add = "--add" in argv
+    update = "--update" in argv or add
     login_only = "--login-root" in argv
     groups, forbidden = read_world()
 
     if update:
         pkgs = load_index()
         order = resolve(groups, pkgs, forbidden)
-        entries = [dict(group=g, name=n, version=pkgs[n]["V"], repo=pkgs[n]["repo"], sha="")
+        pinned = {e["name"]: e for e in read_lock(stale_ok=True)} if add else {}
+        entries = [dict(pinned[n], group=g) if n in pinned else
+                   dict(group=g, name=n, version=pkgs[n]["V"], repo=pkgs[n]["repo"], sha="")
                    for g, n in order]
+        if add:
+            print("fetch-live: new: " + (", ".join(e["name"] for e in entries
+                                                    if e["name"] not in pinned) or "nothing"))
     else:
         entries = read_lock()
+        locked = {e["name"] for e in entries}
+        new = sorted({n for _, names in groups for n in names} - locked)
+        if new:                         # only with LIVE_STALE_LOCK=1
+            print(f"fetch-live: WARNING: left out (not in the lock): {', '.join(new)}")
     bad = [e["name"] for e in entries if e["name"] in forbidden]
     if bad:
         die(f"forbidden package(s) in the lock: {', '.join(bad)}: run --update")
@@ -773,6 +797,11 @@ def main():
     arch_overlay = os.path.join(ROOT, "live", f"overlay.{ARCH}")
     if os.path.isdir(arch_overlay):
         nover += add_overlay(root, arch_overlay, "overlay", f"MyOS overlay.{ARCH}")
+    # This machine's own settings, never committed (.gitignore): say, the
+    # home Wi-Fi network in etc/wpa_supplicant/wpa_supplicant.conf.
+    local_overlay = os.path.join(ROOT, "live", "overlay.local")
+    if os.path.isdir(local_overlay):
+        nover += add_overlay(root, local_overlay, "overlay", "local overlay")
     if os.path.isdir(EXTRA):
         extra_skip = LOGIN_EXTRA_SKIP if login_only else ()
         nover += add_overlay(root, EXTRA, "overlay", "MyOS build", extra_skip)

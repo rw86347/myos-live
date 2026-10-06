@@ -6,3 +6,12 @@
 ! can make bigger.
 XTerm*faceName: DejaVu Sans Mono
 XTerm*faceSize: 11
+
+! A scrollbar on the right and 10000 lines to scroll back through (dmesg
+! is longer than a screen). Shift+PageUp / Shift+PageDown scroll too; the
+! touchpad has no two-finger scrolling yet (it speaks plain PS/2 to us).
+XTerm*scrollBar: true
+XTerm*rightScrollBar: true
+XTerm*saveLines: 10000
+XTerm*scrollTtyOutput: false
+XTerm*scrollKey: true

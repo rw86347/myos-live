@@ -2,3 +2,5 @@
 # Run by icewm-session once IceWM is up: the parts of the desktop that are ours.
 # myos-menu is the Start menu (see live/myos-menu/myos-menu.c).
 myos-menu &
+# myos-wifi is the Wi-Fi icon in the tray (see live/myos-wifi/myos-wifi.c).
+myos-wifi &

@@ -1,0 +1,38 @@
+#!/bin/sh
+# wpa_supplicant: joins the Wi-Fi networks in /etc/wpa_supplicant/
+# wpa_supplicant.conf (the WPA2 handshake, the keys) and takes orders from
+# the Wi-Fi icon. The kernel brings the link's address up by itself (its
+# own DHCP client) once wpa_supplicant has opened the link.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+# Not installed (an older image): wait quietly instead of restarting.
+[ -x /sbin/wpa_supplicant ] || exec sleep 2147483647
+
+# wlan0's interface number, or nothing if there is no wlan0.
+ifindex() { iw dev wlan0 info 2>/dev/null | sed -n 's/.*ifindex \([0-9]*\).*/\1/p'; }
+
+# No wireless interface yet: the driver loads its firmware in the
+# background at boot, and a machine may have no Wi-Fi at all. Look again
+# in a few seconds (runit starts us again when we exit).
+first=$(ifindex)
+if [ -z "$first" ]; then
+    sleep 5
+    exit 1
+fi
+mkdir -p /var/log
+wpa_supplicant -i wlan0 -D nl80211 -c /etc/wpa_supplicant/wpa_supplicant.conf \
+    >> /var/log/wpa_supplicant.log 2>&1 &
+pid=$!
+trap 'kill $pid 2>/dev/null; wait $pid; exit 0' TERM INT
+# After repeated firmware errors iwlwifi resets the card and makes a new
+# wlan0 (another interface number); wpa_supplicant would stay with the old
+# one, which is gone. Start over then.
+while kill -0 $pid 2>/dev/null; do
+    sleep 5
+    if [ "$(ifindex)" != "$first" ]; then
+        echo "wpa_supplicant: wlan0 was made again: starting over" >> /var/log/wpa_supplicant.log
+        kill $pid 2>/dev/null
+        wait $pid
+        exit 1
+    fi
+done
+wait $pid

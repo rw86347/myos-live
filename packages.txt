@@ -72,11 +72,15 @@ iputils-ping
 # useradd, usermod, passwd; doas lets the wheel group act as root (57 KB,
 # sudo is 1.7 MB). The graphical login screen is MyOS's own (myos-login,
 # live/myos-login/), built from the [dev] group's headers.
+# sshd is supervised like agetty (live/overlay/etc/sv/sshd). The client is
+# also in [dev]. Host keys are made on first boot. Incoming TCP still needs
+# the kernel's listen/accept (docs/gaps.md).
 runit
 agetty
 util-linux-login
 shadow
 doas
+openssh-server
 
 [desktop]
 # X11 with IceWM, set up to look and act like Windows XP: plain X with no
@@ -90,6 +94,10 @@ xterm
 font-dejavu
 # GTK's own icons (file dialogs, AbiWord's and Geany's toolbars).
 adwaita-icon-theme
+# GTK 3 itself: MyOS's own programs use it (the Wi-Fi icon, Settings, My
+# Files), so it belongs with the desktop — also in the RAM login image —
+# not only with the office programs that brought it before.
+gtk+3.0
 
 [compositor]
 # picom keeps a picture of every window and builds the screen from them:
@@ -134,16 +142,30 @@ openexr-libopenexr
 # /dev/shm for POSIX shared memory. It may still need more of /proc.
 firefox
 
+[www]
+# Static files only (no CGI). Off until `doas myos-httpd enable`.
+# darkhttpd is one small binary; lighttpd/nginx stay off the disk.
+darkhttpd
+
 [dev]
-# Enough to build MyOS on MyOS, plus adb for Android phones and Python.
+# Enough to build MyOS on MyOS, plus adb for Android phones.
+# C and C++ (g++ was build-only / Mac sysroot only until now).
 make
 gcc
+g++
 musl-dev
+pkgconf
 binutils
 gdb
 strace
 git
+# Python 3 + headers (C extensions) + pip.
 python3
+python3-dev
+py3-pip
+# Java: Alpine's 32-bit tree has OpenJDK 8 only. x86_64 replaces this
+# with 17 (live/packages.x86_64.txt).
+openjdk8
 android-tools
 nasm
 e2fsprogs
@@ -233,8 +255,7 @@ tiff-dev
 openjpeg-dev
 libheif-dev
 openexr-dev
-# WritePerfect: C++ headers (g++ has them) and its libraries' headers.
-g++
+# WritePerfect: C++ headers (g++ is in [dev], on the disk) and its libraries' headers.
 libstdc++-dev
 ncurses-dev
 libxml2-dev

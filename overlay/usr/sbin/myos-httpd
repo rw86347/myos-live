@@ -1,0 +1,37 @@
+#!/bin/sh
+# Enable or disable the live disk's static web server (darkhttpd).
+# It is installed off: this is the switch.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+svc=/etc/sv/httpd
+live=/var/service/httpd
+# If first-boot has not made /var/service yet, the runsvdir default is the same.
+[ -d /var/service ] || live=/etc/runit/runsvdir/default/httpd
+
+usage() {
+    echo "usage: myos-httpd enable | disable | status" >&2
+    exit 2
+}
+
+case ${1:-status} in
+enable|on|start)
+    [ -d "$svc" ] || { echo "myos-httpd: $svc missing"; exit 1; }
+    ln -sfn "$svc" "$live"
+    sv up "$live" 2>/dev/null || true
+    echo "httpd on: http://0.0.0.0:80  files in /var/www/html"
+    ;;
+disable|off|stop)
+    sv down "$live" 2>/dev/null || true
+    rm -f "$live"
+    echo "httpd off (doas myos-httpd enable to start it)"
+    ;;
+status)
+    if [ -L "$live" ] || [ -d "$live" ]; then
+        sv status "$live" 2>/dev/null || echo "httpd: linked, not supervised yet"
+    else
+        echo "httpd: disabled"
+    fi
+    ;;
+*)
+    usage
+    ;;
+esac

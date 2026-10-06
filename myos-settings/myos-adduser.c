@@ -326,8 +326,9 @@ static const char *add(const char *full, const char *user, const char *password,
     if (!h || h[0] != '$')
         return "Can't make the password's hash.";
 
-    static const char *const standard[] = {"audio", "video", "input", NULL};
-    static const char *const administrator[] = {"wheel", "audio", "video", "input", NULL};
+    /* netdev: wpa_supplicant's control socket, so anyone can join Wi-Fi. */
+    static const char *const standard[] = {"audio", "video", "input", "netdev", NULL};
+    static const char *const administrator[] = {"wheel", "audio", "video", "input", "netdev", NULL};
     char *newgroup = add_to_groups(group, user, id, admin ? administrator : standard);
     size_t sn = strlen(shadow), pn = strlen(passwd);
     char *newshadow = malloc(sn + strlen(user) + strlen(h) + 64);
