@@ -546,7 +546,9 @@ static long run_session(pam_handle_t *pamh, const struct passwd *pw, char **pame
         setenv("USER", pw->pw_name, 1);
         setenv("LOGNAME", pw->pw_name, 1);
         setenv("SHELL", pw->pw_shell, 1);
-        setenv("PATH", "/usr/local/bin:/usr/bin:/bin", 1);
+        /* Alpine's /etc/profile PATH: the sbin folders too, so ifconfig,
+           ip and the like are found without typing /sbin/. */
+        setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 1);
         setenv("DISPLAY", ":0", 1);
         execl("/bin/sh", "sh", SESSION, (char *)NULL);
         _exit(127);
