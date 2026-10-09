@@ -17,11 +17,25 @@
 # 32-bit live disk has OpenJDK 8; 64-bit gets a current LTS instead.
 !openjdk8
 
+[desktop]
+# Video and audio. Speaks ALSA (/etc/asound.conf). No i386 Alpine package.
+mplayer
+
+[office]
+# Alpine has LibreOffice, not Apache OpenOffice. The meta package pulls
+# Writer, Calc, Impress, Draw, Base and Math. GTK for IceWM; no KDE/Qt.
+# No i386 Alpine package.
+libreoffice
+libreoffice-gtk
+
 [browser]
 chromium
 
 [dev]
 openjdk17-jdk
+# Claude Code's own search tool is a glibc binary. Alpine's ripgrep is the
+# one it is told to use (USE_BUILTIN_RIPGREP=0).
+ripgrep
 
 [wifi]
 # Wi-Fi (docs/WIFI-PLAN.md W5): wpa_supplicant joins networks (WPA2, the

@@ -1,0 +1,34 @@
+# Vendor defaults, the way Debian and Fedora ship them.
+# Preview is MyOS's PDF and picture viewer (the Mac's Preview).
+[Default Applications]
+application/pdf=preview.desktop
+application/x-pdf=preview.desktop
+image/png=preview.desktop
+image/jpeg=preview.desktop
+image/gif=preview.desktop
+image/bmp=preview.desktop
+image/tiff=preview.desktop
+image/webp=preview.desktop
+image/heic=preview.desktop
+image/heif=preview.desktop
+image/avif=preview.desktop
+image/jxl=preview.desktop
+image/svg+xml=preview.desktop
+image/jp2=preview.desktop
+image/x-exr=preview.desktop
+image/vnd.adobe.photoshop=preview.desktop
+video/mp4=mplayer.desktop
+video/x-matroska=mplayer.desktop
+video/x-msvideo=mplayer.desktop
+video/quicktime=mplayer.desktop
+video/webm=mplayer.desktop
+video/mpeg=mplayer.desktop
+audio/mpeg=mplayer.desktop
+audio/flac=mplayer.desktop
+audio/ogg=mplayer.desktop
+audio/x-wav=mplayer.desktop
+audio/mp4=mplayer.desktop
+
+[Added Associations]
+application/pdf=preview.desktop;
+application/x-pdf=preview.desktop;

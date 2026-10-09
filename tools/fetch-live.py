@@ -618,6 +618,34 @@ def add_overlay(root, src=OVERLAY, group="overlay", who="MyOS overlay",
     return n
 
 
+# Claude Code's linux-x64-musl build (npm @anthropic-ai/claude-code-linux-x64-musl
+# 2.1.295). There is no 32-bit build. The wrapper in live/overlay.x86_64
+# points search at Alpine's ripgrep.
+CLAUDE_TGZ = "claude-code-linux-x64-musl-2.1.295.tgz"
+CLAUDE_TGZ_URL = ("https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64-musl/"
+                  "-/claude-code-linux-x64-musl-2.1.295.tgz")
+CLAUDE_TGZ_SHA = "b1a2eded91011e370fc17b0c9c4aa30e0f3f8289690a340b04383a8f17c49334"
+
+
+def add_claude(root):
+    """The native Claude Code binary, on the 64-bit disk only."""
+    if ARCH != "x86_64":
+        return
+    cache = os.path.join(CACHE, "claude")
+    os.makedirs(cache, exist_ok=True)
+    tgz = os.path.join(cache, CLAUDE_TGZ)
+    if not os.path.exists(tgz) or sha256(tgz) != CLAUDE_TGZ_SHA:
+        print("fetch-live: Claude Code")
+        fetch(CLAUDE_TGZ_URL, tgz)
+    got = sha256(tgz)
+    if got != CLAUDE_TGZ_SHA:
+        die(f"Claude Code checksum mismatch: {got}")
+    with tarfile.open(tgz) as t:
+        blob = t.extractfile("package/claude").read()
+    root.add_bytes("usr/lib/claude/claude", blob, "overlay", 0o755)
+    print(f"fetch-live: Claude Code {len(blob)} bytes")
+
+
 def add_live_user(root):
     """LIVE_USER in /etc/passwd, /etc/group and /etc/shadow (owners and modes
     as the packages had them), and /home/<name> from /etc/skel."""
@@ -805,6 +833,8 @@ def main():
     if os.path.isdir(EXTRA):
         extra_skip = LOGIN_EXTRA_SKIP if login_only else ()
         nover += add_overlay(root, EXTRA, "overlay", "MyOS build", extra_skip)
+    if not login_only:
+        add_claude(root)
     add_live_user(root)
     root.close()
 

@@ -747,9 +747,10 @@ def mockup():
     o.append('<path d="M%d %dh%d" stroke="%s"/>' % (wx + 1, wy + wh - 24, ww - 2, C["border"]))
     o.append(text(wx + 10, wy + wh - 8, "6 objects, 289 KB", 11, C["text_soft"]))
     # Two strokes in the corner: the place you drag to resize the window.
+    # They slope down into the corner, not back up into the window.
     o.append('<g stroke="#8a8478" stroke-width="1.25" stroke-linecap="round">'
-             '<path d="M%d %dl-8-8"/><path d="M%d %dl-8-8"/></g>'
-             % (wx + ww - 8, wy + wh - 6, wx + ww - 12, wy + wh - 6))
+             '<path d="M%d %dl-8 8"/><path d="M%d %dl-8 8"/></g>'
+             % (wx + ww - 8, wy + wh - 14, wx + ww - 12, wy + wh - 14))
 
     # the start menu (open, so the Start button is drawn pressed)
     mw, mh = 390, 430

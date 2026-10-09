@@ -3,3 +3,10 @@
 # the disk (a web browser, amixer).
 key "Alt+Ctrl+t"    xterm
 key "Alt+Ctrl+s"    myos-settings
+# Force Quit (live/myos-forcequit): kill -9 for a program that stopped
+# answering. Ctrl+Shift+Esc as on Windows (IceWM keeps Ctrl+Alt+Esc).
+key "Ctrl+Shift+Escape"     myos-forcequit
+# A keyboard's own volume keys (laptops): the tray's speaker (myos-volume).
+key "XF86AudioRaiseVolume"  myos-volume --up
+key "XF86AudioLowerVolume"  myos-volume --down
+key "XF86AudioMute"         myos-volume --mute

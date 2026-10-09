@@ -67,17 +67,32 @@ def main() -> None:
         dest, src = item.split("=", 1)
         extras.append((dest.lstrip("/"), src))
 
+    # Last member for each path wins: the tar lays our files over Alpine's
+    # (the same path twice), and only the last copy goes into the cpio. The
+    # kernel's unpacker would replace the entry in place anyway; this keeps
+    # the archive smaller and each path in it once.
+    last: dict[str, int] = {}
+    with tarfile.open(args.tar, "r:") as tar:
+        for i, ti in enumerate(tar):
+            name = ti.name
+            while name.startswith("./"):
+                name = name[2:]
+            if name and name != ".":
+                last[name] = i
+
     ino = 1
     files = 0
     seen: dict[str, bytes] = {}
     now = int(time.time())
 
     with tarfile.open(args.tar, "r:") as tar, open(args.cpio + ".tmp", "wb") as out:
-        for ti in tar:
+        for i, ti in enumerate(tar):
             name = ti.name
             while name.startswith("./"):
                 name = name[2:]
             if not name or name == ".":
+                continue
+            if last.get(name) != i:
                 continue
             if ti.isdir():
                 data = b""

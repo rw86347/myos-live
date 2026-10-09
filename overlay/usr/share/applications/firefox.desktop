@@ -1,7 +1,8 @@
 [Desktop Entry]
-Name=Web Browser
+Name=Firefox
 Comment=Browse the web
 Exec=firefox %u
+TryExec=firefox
 Icon=firefox
 Terminal=false
 Type=Application

@@ -28,8 +28,10 @@
  * three states, the Run box, and the tray. menu.conf there says where each
  * entry is and what it runs, and where the clock sits in the tray. This
  * program adds only your name, the entry under the mouse, what you type,
- * and the time. The scale is the desktop's (100 to 200%, see
- * myos-xsettings); when it changes, the program starts itself over.
+ * and the time. All Programs is the exception: its row is drawn with the
+ * menu, and the folders that open from it are drawn here, from the Programs
+ * directories (see programs.c). The scale is the desktop's (100 to 200%,
+ * see myos-xsettings); when it changes, the program starts itself over.
  *
  * Cost: opening the menu reads the screen under it once (XGetImage, so the
  * round corners and the shadow blend into whatever is there) and sends it
@@ -59,6 +61,7 @@
 #include <unistd.h>
 
 #include "xpic.h"
+#include "programs.h"
 
 #define MAX_ITEMS 16
 
@@ -89,6 +92,7 @@ static Visual *vis;
 static Colormap cmap;
 static int screen, depth, sw, sh;
 static XftFont *f_name, *f_type, *f_clock;
+static XftFont *f_prog;             /* All Programs: half again the Run box's type */
 
 static struct pic menu_pic, run_pic, tray_pic;
 static struct pic corner_pic[2];    /* the hot corner's curl: resting, under the mouse */
@@ -102,6 +106,7 @@ static int nitems;
 static int name_x, name_y, name_size, type_size = 13;
 static int clock_x, clock_y, clock_size;   /* where the time sits in the tray */
 static int slot_x, slot_y, slot_size;      /* where a docked icon sits in the tray */
+static int vol_x, vol_y, vol_size;         /* the speaker in the tray (0 size: none) */
 static Atom a_tray_sel, a_tray_opcode, a_xembed;   /* (the notification area) */
 static Window tray_owner;           /* holds the tray selection; dock requests come to it */
 static Window icon_win;             /* the docked icon (it stays ours if the bar restarts) */
@@ -292,6 +297,11 @@ static void read_conf(void)
             if (sscanf(rest, "%d %d %d", &x, &y, &sz) == 3)
                 slot_x = x, slot_y = y, slot_size = sz;
         }
+        else if (!strcmp(key, "volume")) {
+            int x, y, sz;
+            if (sscanf(rest, "%d %d %d", &x, &y, &sz) == 3)
+                vol_x = x, vol_y = y, vol_size = sz;
+        }
         else if (!strcmp(key, "name") && nr >= 3)
             name_x = r.x, name_y = r.y, name_size = r.w;
         else if (!strcmp(key, "typesize") && nr >= 1)
@@ -366,13 +376,17 @@ static Window popup(int x, int y, int w, int h, Pixmap bg)
 
 /* Take the mouse and the keyboard while a popup is open. Someone else (an
    IceWM menu, a dragged window) may hold them for a moment, so retry briefly. */
-static int grab_input(Window w)
+/* owner_events: the All Programs flyouts are our windows too, and they
+   need the motion and clicks while this grab is held. The Run box is the
+   only window up, so it keeps the events itself. */
+static int grab_input(Window w, int owner_events)
 {
     struct timespec t = { 0, 10 * 1000 * 1000 };
+    Bool own = owner_events ? True : False;
     for (int i = 0; i < 50; i++) {
-        if (XGrabPointer(dpy, w, False, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+        if (XGrabPointer(dpy, w, own, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
                          GrabModeAsync, GrabModeAsync, None, None, CurrentTime) == GrabSuccess) {
-            if (XGrabKeyboard(dpy, w, False, GrabModeAsync, GrabModeAsync, CurrentTime) == GrabSuccess)
+            if (XGrabKeyboard(dpy, w, own, GrabModeAsync, GrabModeAsync, CurrentTime) == GrabSuccess)
                 return 1;
             XUngrabPointer(dpy, CurrentTime);
         }
@@ -426,6 +440,37 @@ static void launch(const char *cmd)
         waitpid(p, NULL, 0);
 }
 
+/* The speaker in the tray (myos-volume does the work): a click opens the
+   volume pop-up above it, the wheel turns it up or down a step, a middle
+   click mutes. The picture is the theme's; the hit area is a little wider
+   than the icon, as a finger-sized target. */
+static void speaker_click(const XButtonEvent *b)
+{
+    int pad = vol_size / 3;
+    if (b->x < vol_x - pad || b->x >= vol_x + vol_size + pad)
+        return;                     /* elsewhere in the tray: ignored, as before */
+    char cmd[96];
+    switch (b->button) {
+    case Button1:
+        /* Its bottom centre above the icon: the icon's middle, the tray's top. */
+        snprintf(cmd, sizeof cmd, "exec myos-volume --at %d %d",
+                 b->x_root - b->x + vol_x + vol_size / 2, b->y_root - b->y);
+        break;
+    case Button2:
+        snprintf(cmd, sizeof cmd, "exec myos-volume --mute");
+        break;
+    case Button4:
+        snprintf(cmd, sizeof cmd, "exec myos-volume --up");
+        break;
+    case Button5:
+        snprintf(cmd, sizeof cmd, "exec myos-volume --down");
+        break;
+    default:
+        return;
+    }
+    launch(cmd);
+}
+
 /* Run...: type a command, Enter (or OK) starts it. */
 static void run_dialog(void)
 {
@@ -435,7 +480,7 @@ static void run_dialog(void)
     Pixmap bg = pixmap_from(px, w, h);
     free(px);
     Window win = popup(x, y, w, h, bg);
-    if (!grab_input(win)) {
+    if (!grab_input(win, 0)) {
         close_popup(win, bg);
         return;
     }
@@ -944,8 +989,43 @@ static void make_corner(void)
 
 /* --- the menu, again ------------------------------------------------------------- */
 
-/* Show the menu until something is chosen; returns the entry, or -1. It
-   stands on the taskbar, at the left, with Start held down below it. */
+static char run_cmd[240];          /* a program chosen from All Programs */
+
+static int is_programs(int i)
+{
+    return i >= 0 && !strcmp(items[i].cmd, "@programs");
+}
+
+/* The next event, or 0 if `ms` passed with none (ms < 0 waits forever).
+   All Programs opens a folder a moment after the pointer rests on it, so
+   the menu cannot block inside XNextEvent. */
+static int wait_input(XEvent *ev, int ms)
+{
+    int fd = ConnectionNumber(dpy);
+    if (XPending(dpy)) {
+        next_event(ev);
+        return 1;
+    }
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(fd, &fds);
+    struct timeval tv, *tp = NULL;
+    if (ms >= 0) {
+        tv.tv_sec = ms / 1000;
+        tv.tv_usec = (ms % 1000) * 1000;
+        tp = &tv;
+    }
+    XFlush(dpy);
+    if (select(fd + 1, &fds, NULL, NULL, tp) > 0 && XPending(dpy)) {
+        next_event(ev);
+        return 1;
+    }
+    return 0;
+}
+
+/* Show the menu until something is chosen; returns the entry, or -1.
+   -3 means All Programs chose run_cmd. The menu stands on the taskbar,
+   at the left, with Start held down below it. */
 static int menu(void)
 {
     int w = menu_pic.w, h = menu_pic.h, y = bar_top() - h;
@@ -959,45 +1039,99 @@ static int menu(void)
     text(bg, f_name, 0xffffff, 255, name_x, name_y, user);
 
     Window win = popup(0, y, w, h, bg);
-    if (!grab_input(win)) {
+    if (!grab_input(win, 1)) {
         close_popup(win, bg);
         return -1;
     }
+    struct programs_env pe = {
+        .dpy = dpy, .vis = vis, .cmap = cmap, .root = root,
+        .screen = screen, .depth = depth, .sw = sw, .sh = sh,
+        .scale = scale, .font = f_prog ? f_prog : f_type,
+    };
+    programs_load(&pe);
+    for (int i = 0; i < nitems; i++)
+        if (is_programs(i))
+            programs_place(0, y, w, h, items[i].r.x, items[i].r.y, items[i].r.w, items[i].r.h);
+
     show_start(START_PRESSED);
     GC gc = XCreateGC(dpy, win, 0, NULL);
     int cur = -1, chosen = -2;      /* -2 still open */
     while (chosen == -2) {
         XEvent ev;
-        next_event(&ev);
+        if (!wait_input(&ev, programs_arm_ms())) {
+            programs_tick();
+            continue;
+        }
+        if (programs_owns(ev.xany.window)) {
+            int a = programs_event(&ev, run_cmd, (int)sizeof run_cmd);
+            if (a == 1)
+                chosen = -3;
+            else if (a == -1)
+                chosen = -1;
+            continue;
+        }
         switch (ev.type) {
         case Expose:
-            if (ev.xexpose.count == 0)
+            if (ev.xexpose.window == win && ev.xexpose.count == 0)
                 light(win, gc, -1, cur);
             break;
         case MotionNotify: {
-            int i = item_at(ev.xmotion.x, ev.xmotion.y);
+            int i;
+            if (ev.xmotion.window != win)
+                break;
+            i = item_at(ev.xmotion.x, ev.xmotion.y);
             if (i != cur)
                 light(win, gc, cur, i), cur = i;
+            if (is_programs(i))
+                programs_hover_item(1);
+            else if (i >= 0)
+                programs_hover_item(0);
+            else
+                programs_hover_item(-1);
             break;
         }
         case ButtonPress:
             /* A click outside the menu (Start included) closes it. A click
                on an entry runs it when the button comes up, so you can
-               also press Start, slide up to an entry and let go. */
-            if (!inside(&(struct rect){ 0, 0, w, h }, ev.xbutton.x, ev.xbutton.y))
+               also press Start, slide up to an entry and let go. The
+               flyouts are not "outside". */
+            if (programs_hit(ev.xbutton.x_root, ev.xbutton.y_root))
+                break;
+            if (ev.xbutton.window != win ||
+                !inside(&(struct rect){ 0, 0, w, h }, ev.xbutton.x, ev.xbutton.y))
                 chosen = -1;
             break;
         case ButtonRelease:
-            if (ev.xbutton.button == Button1 && item_at(ev.xbutton.x, ev.xbutton.y) >= 0)
-                chosen = item_at(ev.xbutton.x, ev.xbutton.y);
+            if (ev.xbutton.window != win || ev.xbutton.button != Button1)
+                break;
+            {
+                int i = item_at(ev.xbutton.x, ev.xbutton.y);
+                if (is_programs(i))
+                    programs_toggle();
+                else if (i >= 0)
+                    chosen = i;
+            }
             break;
         case KeyPress: {
             KeySym k = XLookupKeysym(&ev.xkey, 0);
             int next = cur;
+            if (programs_open()) {
+                int a = programs_key((unsigned long)k, run_cmd, (int)sizeof run_cmd);
+                if (a == 1)
+                    chosen = -3;
+                else if (a == -1)
+                    chosen = -1;
+                break;
+            }
             if (k == XK_Escape || opens_menu(&ev.xkey))
                 chosen = -1;
-            else if ((k == XK_Return || k == XK_KP_Enter) && cur >= 0)
-                chosen = cur;
+            else if ((k == XK_Return || k == XK_KP_Enter) && cur >= 0) {
+                if (is_programs(cur))
+                    programs_toggle();
+                else
+                    chosen = cur;
+            } else if (k == XK_Right && is_programs(cur))
+                programs_toggle();
             else if (k == XK_Down || k == XK_Tab)
                 next = (cur + 1) % nitems;
             else if (k == XK_Up)
@@ -1008,6 +1142,7 @@ static int menu(void)
         }
         }
     }
+    programs_close();
     XFreeGC(dpy, gc);
     close_popup(win, bg);
     show_start(START_NORMAL);
@@ -1017,6 +1152,8 @@ static int menu(void)
 static void open_menu(void)
 {
     int i = menu();
+    if (i == -3)
+        launch(run_cmd);
     if (i < 0)
         return;
     if (strcmp(items[i].cmd, "@run") == 0)
@@ -1081,6 +1218,8 @@ int main(int argc, char **argv)
     f_name = XftFontOpenName(dpy, screen, spec);
     snprintf(spec, sizeof spec, "Verdana,DejaVu Sans:pixelsize=%d", type_size);
     f_type = XftFontOpenName(dpy, screen, spec);
+    snprintf(spec, sizeof spec, "Verdana,DejaVu Sans:pixelsize=%d", type_size * 3 / 2);
+    f_prog = XftFontOpenName(dpy, screen, spec);
     if (clock_size) {
         snprintf(spec, sizeof spec, "Verdana,DejaVu Sans:pixelsize=%d", clock_size);
         f_clock = XftFontOpenName(dpy, screen, spec);
@@ -1126,6 +1265,8 @@ int main(int argc, char **argv)
         case ButtonPress:
             if (ev.xbutton.window == start_win && ev.xbutton.button == Button1)
                 open_menu();
+            else if (ev.xbutton.window == tray_win && vol_size)
+                speaker_click(&ev.xbutton);
             break;
         case MapNotify:
         case ConfigureNotify:

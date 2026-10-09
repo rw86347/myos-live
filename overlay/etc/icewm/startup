@@ -4,3 +4,8 @@
 myos-menu &
 # myos-wifi is the Wi-Fi icon in the tray (see live/myos-wifi/myos-wifi.c).
 myos-wifi &
+# myos-desktop draws ~/Desktop on the wallpaper, and the right-click menu
+# (see live/myos-desktop/myos-desktop.c).
+myos-desktop &
+# The Recycle can on the desktop (see live/myos-trash/myos-trash.c).
+myos-trash &

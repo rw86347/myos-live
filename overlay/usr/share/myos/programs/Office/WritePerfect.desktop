@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=WritePerfect
+Comment=WordPerfect 5.1 style
+Exec=writeperfect
+Icon=writeperfect
+Terminal=false
+Categories=Office;WordProcessor;

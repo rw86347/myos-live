@@ -1,4 +1,8 @@
-# IceWM settings for every user (a user's ~/.icewm/preferences wins).
+# IceWM settings for every user. IceWM reads only the FIRST preferences file
+# it finds, and ~/.icewm comes before /etc/icewm, so a user's file replaces
+# this one whole. myos-desktop therefore makes each user's file from this
+# one at every login (adding only the wallpaper): edit here, not there.
+# Settings that must never change are in /etc/icewm/prefoverride.
 
 # The desktop's look: the Golden Hour theme, written by
 # live/theme/make-live-theme.py from the palette in
@@ -7,6 +11,10 @@ Theme="GoldenHour/default.theme"
 DesktopBackgroundImage="/usr/share/myos/theme/wallpaper.jpg"
 DesktopBackgroundScaled=1
 DesktopBackgroundCenter=1
+# Right-click on the wallpaper is myos-desktop's menu (New Folder, Change
+# Desktop Background…). These stop IceWM opening its own menu there.
+DesktopMenuButton=0
+DesktopWinMenuButton=0
 
 # Windows XP behaviour: a window's contents move and resize with it.
 # Plain X with no compositor makes that a pixel copy, cheap on old PCs.

@@ -1,0 +1,12 @@
+#!/bin/sh
+# apk runs every program in this folder before ("pre-commit") and after
+# ("post-commit") it changes packages. Upgrading coreutils puts back its own
+# /bin/rm, a symlink to GNU's coreutils; people's rm is MyOS's, which hands
+# root to GNU rm itself (live/myos-rm/myos-rm.c). So after every apk run,
+# point /bin/rm and /usr/bin/rm at it again.
+[ "$1" = post-commit ] || exit 0
+[ -x /usr/bin/myos-rm ] || exit 0
+for f in /bin/rm /usr/bin/rm; do
+    [ "$(readlink "$f")" = /usr/bin/myos-rm ] || ln -sfn /usr/bin/myos-rm "$f"
+done
+exit 0

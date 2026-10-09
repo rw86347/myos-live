@@ -1,0 +1,6 @@
+[Desktop Entry]
+# A compositor that runs in the background, not a program to open.
+Type=Application
+Name=picom
+Exec=picom
+Hidden=true

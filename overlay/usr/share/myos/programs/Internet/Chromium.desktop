@@ -1,0 +1,6 @@
+[Desktop Entry]
+# The Web Browser entry already starts Chromium (myos-browser): no second one.
+Type=Application
+Name=Chromium
+Exec=/usr/bin/chromium-browser %U
+Hidden=true

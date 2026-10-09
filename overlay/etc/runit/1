@@ -22,18 +22,17 @@ mkdir -p /dev/shm
 mountpoint -q /dev/shm || mount -t tmpfs -o mode=1777,nosuid,nodev,noexec shm /dev/shm 2>/dev/null
 mkdir -p /run/runit /tmp /var/log
 chmod 1777 /tmp
+# The mount table, as on any Linux: mount, df and GLib read /etc/mtab.
+[ -L /etc/mtab ] || ln -sf /proc/self/mounts /etc/mtab
 
 # The nameserver, from whoever answered DHCP. The kernel is the DHCP client,
-# so it reports what this network's resolver is as /proc/net/dns, already in
-# resolv.conf's format. A resolv.conf shipped in the image can only name
-# QEMU's 10.0.2.3, which is wrong on every real network — and a real network
-# is the reason DHCP exists. Skipped quietly if /proc didn't mount or the root
-# is read-only; then DNS falls back to whatever the image shipped.
-# `read` is a shell builtin, and that is the point: BusyBox's cp and cat both
-# reach for sendfile64 whenever the destination can take it, the kernel does
-# not have that syscall yet, and the failed call prints a line on every boot.
-# /proc/net/dns is one line by construction (fs/procfs.c).
-[ -r /proc/net/dns ] && { read -r ns < /proc/net/dns; echo "$ns" > /etc/resolv.conf; } 2>/dev/null
+# so it reports this network's resolver as /proc/net/dns, in resolv.conf's
+# format, made when it is read. /etc/resolv.conf is a link to it, not a copy:
+# on a laptop Wi-Fi's lease arrives seconds after this script (and again after
+# every reconnect), and a copy made now would say "no nameserver" for good.
+# musl reads resolv.conf afresh for every lookup. Skipped quietly if /proc
+# didn't mount or the root is read-only.
+[ -r /proc/net/dns ] && ln -sfn /proc/net/dns /etc/resolv.conf 2>/dev/null
 
 # runit's controls: `reboot` and `poweroff` (runit-init 6 / 0) make these
 # executable and wake process 1. They live in /run (via the links in

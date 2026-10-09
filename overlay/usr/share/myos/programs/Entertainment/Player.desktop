@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Player
+Comment=Play movies and music
+Exec=myos-player
+Icon=sound
+Terminal=false
+Categories=AudioVideo;Player;

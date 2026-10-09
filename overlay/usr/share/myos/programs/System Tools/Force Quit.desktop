@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Force Quit
+Comment=End a program that stopped answering (Ctrl+Shift+Esc)
+Exec=myos-forcequit
+Icon=settings
+Terminal=false
+Categories=System;

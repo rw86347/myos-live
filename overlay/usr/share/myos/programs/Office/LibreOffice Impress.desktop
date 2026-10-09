@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=LibreOffice Impress
+Comment=Presentations
+Exec=libreoffice --impress
+Icon=text-editor
+Terminal=false
+Categories=Office;Presentation;

@@ -98,6 +98,12 @@ adwaita-icon-theme
 # Files), so it belongs with the desktop — also in the RAM login image —
 # not only with the office programs that brought it before.
 gtk+3.0
+# xdotool: moves the pointer to an exact spot, clicks, types any text, and
+# finds windows by name, through X's test extension. tools/qemu-desktop.py
+# drives the desktop with it over ssh (its `xdo` command); people's
+# scripts can use it too. Also in the RAM login image, where the desktop
+# tests run.
+xdotool
 
 [compositor]
 # picom keeps a picture of every window and builds the screen from them:
@@ -106,6 +112,21 @@ gtk+3.0
 # session starts it only when /etc/myos/desktop.conf says so. Requirements
 # and the check: docs/DESIGN.md, "the compositor is optional".
 picom
+
+[fonts]
+# Chinese, Japanese and Korean text: Noto Sans CJK and Noto Serif CJK
+# (Google and Adobe's Source Han), regular and bold. DejaVu has no CJK
+# letters at all, so without these the installer's first page showed 中文
+# and 日本語 as boxes. One font file per style holds the Simplified Chinese,
+# Traditional Chinese, Japanese and Korean shapes of each character;
+# fontconfig picks by the text's language. 93 MB, so not in the RAM login
+# image (LOGIN_GROUPS). On an installed system it comes with the installer's
+# "Also install fonts and input for Chinese" (docs/INSTALLER-PLAN.md).
+font-noto-cjk
+# Open Sans: the Golden Hour headings (the mockups say Trebuchet MS, which
+# isn't free; Open Sans is the closest free humanist sans). 3 MB. Body text
+# stays DejaVu Sans, the mockups' own stand-in for Verdana.
+font-opensans
 
 [office]
 # AbiWord: a small word processor that opens .doc, .docx and .rtf.

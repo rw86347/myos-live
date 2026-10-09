@@ -1,0 +1,5 @@
+#!/bin/sh
+# Claude Code, the native musl build. Its bundled ripgrep is a glibc
+# program, so search uses Alpine's rg instead.
+export USE_BUILTIN_RIPGREP=0
+exec /usr/lib/claude/claude "$@"

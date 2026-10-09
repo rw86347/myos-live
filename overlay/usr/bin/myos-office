@@ -1,0 +1,11 @@
+#!/bin/sh
+# myos-office — opens word-processor documents (.docx, .doc, .odt, .rtf,
+# .abw) for the desktop and My Files. LibreOffice on the 64-bit disk: it
+# reads and writes Word files properly. AbiWord where LibreOffice isn't
+# installed (the 32-bit disk) — but Alpine's AbiWord has no Word importer,
+# so it shows a .docx as its raw zip bytes ("PK...", 2026-10-09).
+# One name for every launcher, like myos-browser.
+if command -v libreoffice >/dev/null 2>&1; then
+    exec libreoffice "$@"
+fi
+exec abiword "$@"

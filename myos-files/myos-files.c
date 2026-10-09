@@ -16,7 +16,7 @@
  *
  * What it does: browse folders; open files with the program for them;
  * Back, Forward, Up; type a path; make, rename, copy, paste and delete
- * (to the Recycle Bin, ~/.local/share/Trash) files and folders; Disks
+ * (to ~/Trash — the same can `rm` uses) files and folders; Disks
  * (the mounted file systems), Network (Settings) and Terminal (here).
  *
  * One addition to the mockup, from the Mac's Finder: a View button right
@@ -135,6 +135,8 @@ static double K = 1;                  /* GTK pixels per mockup unit */
 static char cwd[PATH_MAX];            /* the folder shown, or DISKS */
 static struct item *items;
 static int nitems, sel = -1;
+static double press_x, press_y;
+static int dragging;
 static int show_hidden;
 static GPtrArray *back_hist, *fwd_hist;
 static char clip[PATH_MAX];           /* Copy remembers a path; Paste copies it here */
@@ -165,13 +167,14 @@ static struct edit addr, ren;
 static int ren_idx = -1;
 
 /* Actions: from the menus, the task pane, the toolbar and the keyboard. */
-enum { A_NONE, A_OPEN, A_NEWFOLDER, A_RENAME, A_COPY, A_PASTE, A_DELETE, A_CLOSE,
+enum { A_NONE, A_OPEN, A_NEWFOLDER, A_RENAME, A_COPY, A_PASTE, A_DELETE, A_PUTBACK,
+       A_EMPTY, A_CLOSE,
        A_HIDDEN, A_REFRESH, A_TERMINAL, A_SETTINGS, A_ABOUT, A_DISKS, A_NETWORK,
        A_HOME, A_BACK, A_FORWARD, A_UP, A_V_ICONS, A_V_LIST, A_V_COLUMNS, A_V_GALLERY };
 
 struct task { const char *icon; char label[48]; int act; };
 static struct { const char *title; double y, h; int first, n; } groups[2];
-static struct task tasks[8];
+static struct task tasks[12];
 static int ngroups, ntasks;
 static int enabled(int a);
 
@@ -787,8 +790,13 @@ static const char *const PDF_EXT[] = { "pdf", "png", "jpg", "jpeg", "jpe", "gif"
     "heic", "heif", "avif", "jxl", "webp", "ico", "icns", "tga", "jp2", "j2k", "jpf", "exr", "psd",
     "svg", "pbm", "pgm", "ppm", "pnm", "xbm", "xpm", "cr2", "nef", "arw", "dng", "orf", "rw2", "raf", NULL };
 static const char *const WP_EXT[] = { "wpd", "wp", "wp5", "wp6", NULL };
-static const char *const DOC_EXT[] = { "doc", "docx", "rtf", "odt", "abw", NULL };
+static const char *const DOC_EXT[] = { "doc", "docx", "rtf", "abw", NULL };
+static const char *const LO_EXT[] = { "odt", "ods", "odp", "odg", "odf", "xls", "xlsx",
+    "xlsm", "ppt", "pptx", "pps", "ppsx", NULL };
 static const char *const WEB_EXT[] = { "html", "htm", "xhtml", NULL };
+static const char *const MEDIA_EXT[] = { "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm",
+    "mpg", "mpeg", "m4v", "ts", "m2ts", "mp3", "flac", "ogg", "oga", "wav", "aac", "m4a",
+    "wma", "opus", NULL };
 static const char *const IMG_EXT[] = { "png", "jpg", "jpeg", "gif", "bmp", "svg", "webp", "tif",
     "tiff", "heic", "heif", "avif", "ico", "xpm", "tga", "pnm", "ppm", "pgm", "pbm", NULL };
 
@@ -802,8 +810,12 @@ static const char *file_icon(const char *name, const char *path, const struct st
         return "writeperfect";
     if (has_ext(name, DOC_EXT))
         return "text-editor";
+    if (has_ext(name, LO_EXT))
+        return "text-editor";
     if (has_ext(name, WEB_EXT))
         return "web-browser";
+    if (has_ext(name, MEDIA_EXT))
+        return "sound";
     if (!S_ISREG(st->st_mode))
         return "binary-file";
     if (has_ext(name, TEXT_EXT))
@@ -815,6 +827,17 @@ static const char *file_icon(const char *name, const char *path, const struct st
 static void join(char *out, size_t size, const char *dir, const char *name)
 {
     snprintf(out, size, "%s%s%s", dir, strcmp(dir, "/") ? "/" : "", name);
+}
+
+/* ~/Trash: the same can `rm` uses. Sidecars (._name.where) stay hidden. */
+static int in_trash(void)
+{
+    const char *home = getenv("HOME");
+    char t[PATH_MAX];
+    if (!home || !home[0] || !strcmp(cwd, DISKS))
+        return 0;
+    snprintf(t, sizeof t, "%s/Trash", home);
+    return !strcmp(cwd, t);
 }
 
 /* Folders first, then by name, ignoring case — the mockup's order. */
@@ -1258,8 +1281,17 @@ static void relayout(void)
         const char *what = sel >= 0 && items[sel].dir ? "folder" : "file";
         tasks[ntasks] = (struct task){ "text-file", "", A_COPY };
         snprintf(tasks[ntasks++].label, sizeof tasks[0].label, "Copy this %s", what);
-        tasks[ntasks] = (struct task){ "recycle", "", A_DELETE };
-        snprintf(tasks[ntasks++].label, sizeof tasks[0].label, "Delete this %s", what);
+        if (in_trash()) {
+            tasks[ntasks] = (struct task){ "folder", "", A_PUTBACK };
+            snprintf(tasks[ntasks++].label, sizeof tasks[0].label, "Put back this %s", what);
+            tasks[ntasks] = (struct task){ "recycle", "", A_DELETE };
+            snprintf(tasks[ntasks++].label, sizeof tasks[0].label, "Delete this %s for good", what);
+            tasks[ntasks] = (struct task){ "recycle", "Empty Trash", A_EMPTY };
+            ntasks++;
+        } else {
+            tasks[ntasks] = (struct task){ "recycle", "", A_DELETE };
+            snprintf(tasks[ntasks++].label, sizeof tasks[0].label, "Delete this %s", what);
+        }
         groups[ngroups].n = ntasks - groups[ngroups].first;
         groups[ngroups].y = gy;
         groups[ngroups].h = 33 + groups[ngroups].n * 25;
@@ -2110,14 +2142,15 @@ static gboolean on_draw(GtkWidget *w, cairo_t *cr, gpointer data)
     }
     text(cr, 9, H - 8, st, 11, TEXT_SOFT, 0, 0, W - 40);
     /* Two strokes in the corner, so it reads as a place to drag and resize.
-       They run at 45 degrees, parallel, clear of the window's round corner. */
+       They run down toward the corner ( \ ), the way a window's grip does,
+       parallel and clear of the round corner. */
     rgb(cr, 0x8a8478, 1);
     cairo_set_line_width(cr, 1.25);
     cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
     for (int i = 0; i < 2; i++) {
-        double x = W - 8 - i * 4, y = H - 6;
+        double x = W - 8 - i * 4, y = H - 14;
         cairo_move_to(cr, x, y);
-        cairo_line_to(cr, x - 8, y - 8);
+        cairo_line_to(cr, x - 8, y + 8);
         cairo_stroke(cr);
     }
     return TRUE;
@@ -2163,7 +2196,8 @@ static const struct mitem M_TOOLS[] = {
 static const struct mitem M_HELP[] = { { "About My Files", "", A_ABOUT }, { NULL, NULL, -1 } };
 static const struct mitem *const MENU_ITEMS[] = { M_FILE, M_EDIT, M_VIEW, M_TOOLS, M_HELP };
 static const struct mitem M_ON_FILE[] = {
-    { "Open", "", A_OPEN }, { NULL, NULL, 0 }, { "Copy", "", A_COPY }, { "Delete", "", A_DELETE },
+    { "Open", "", A_OPEN }, { NULL, NULL, 0 }, { "Copy", "", A_COPY }, { "Put Back", "", A_PUTBACK },
+    { "Delete", "", A_DELETE },
     { "Rename", "", A_RENAME }, { NULL, NULL, -1 } };
 static const struct mitem M_ON_FOLDER[] = {
     { "New Folder", "", A_NEWFOLDER }, { "Paste", "", A_PASTE }, { NULL, NULL, 0 },
@@ -2185,6 +2219,8 @@ static int enabled(int a)
     switch (a) {
     case A_OPEN: return sel >= 0;
     case A_RENAME: case A_DELETE: return sel >= 0 && !disks;
+    case A_PUTBACK: return sel >= 0 && in_trash();
+    case A_EMPTY: return in_trash();
     case A_COPY: return sel >= 0 && !disks;
     case A_NEWFOLDER: return writable_here();
     case A_PASTE: return clip[0] && writable_here();
@@ -2615,10 +2651,17 @@ static void open_item(int i)
     else if (has_ext(name, WP_EXT))
         prog = "writeperfect";
     else if (has_ext(name, DOC_EXT))
-        prog = "abiword";
+        prog = "myos-office";     /* LibreOffice, or AbiWord without it */
+    else if (has_ext(name, LO_EXT))
+        prog = "libreoffice";
     else if (has_ext(name, WEB_EXT))
-        prog = "firefox";
-    else if (!strcmp(items[i].icon, "text-file"))
+        prog = "myos-browser";      /* Chromium or Firefox, whichever the disk has */
+    else if (has_ext(name, MEDIA_EXT)) {
+        const char *argv[] = { "myos-player", path, NULL };     /* Player: QuickTime's look */
+        spawn(cwd, argv);
+        say("Opening %s...", name);
+        return;
+    } else if (!strcmp(items[i].icon, "text-file"))
         prog = "geany";
     if (!prog) {
         const char *dot = strrchr(name, '.');
@@ -2753,39 +2796,21 @@ static void paste(void)
     say("Copying %s...", base);
 }
 
-/* The Recycle Bin is the freedesktop.org trash, so other programs see the
-   same one: the file moves to ~/.local/share/Trash/files and a note of
-   where it came from goes in .../info/<name>.trashinfo. Moving is a
-   rename, so it only works on the same disk; -1 with errno EXDEV says the
-   file is on another one. */
-static int trash(const char *path, const char *base)
+/* `rm` is ours: it moves to ~/Trash and writes ._name.where (path, uid,
+   gid, mode). --reallyDelete is the Unix rm. */
+static int run_rm(char **argv)
 {
-    const char *home = getenv("HOME");
-    char dir[PATH_MAX], files[PATH_MAX], info[PATH_MAX], name[NAME_MAX + 16], to[PATH_MAX];
-    snprintf(dir, sizeof dir, "%s/.local/share/Trash", home ? home : "");
-    snprintf(files, sizeof files, "%s/files", dir);
-    snprintf(info, sizeof info, "%s/info", dir);
-    g_mkdir_with_parents(files, 0700);
-    g_mkdir_with_parents(info, 0700);
-    snprintf(name, sizeof name, "%s", base);
-    snprintf(to, sizeof to, "%s/%s", files, name);
-    for (int n = 2; !access(to, F_OK) && n < 10000; n++) {
-        snprintf(name, sizeof name, "%s.%d", base, n);
-        snprintf(to, sizeof to, "%s/%s", files, name);
-    }
-    if (rename(path, to))
+    gint status = 0;
+    GError *e = NULL;
+    if (!g_spawn_sync(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, NULL,
+                      &status, &e) || !g_spawn_check_exit_status(status, NULL)) {
+        if (e) {
+            oops("%s", e->message);
+            g_error_free(e);
+        } else {
+            oops("rm could not finish.");
+        }
         return -1;
-    char note[PATH_MAX];
-    snprintf(note, sizeof note, "%s/%s.trashinfo", info, name);
-    FILE *f = fopen(note, "w");
-    if (f) {
-        char when[32];
-        time_t t = time(NULL);
-        strftime(when, sizeof when, "%Y-%m-%dT%H:%M:%S", localtime(&t));
-        char *uri = g_uri_escape_string(path, "/", TRUE);
-        fprintf(f, "[Trash Info]\nPath=%s\nDeletionDate=%s\n", uri, when);
-        g_free(uri);
-        fclose(f);
     }
     return 0;
 }
@@ -2794,41 +2819,48 @@ static void delete_item(void)
 {
     if (sel < 0 || !strcmp(cwd, DISKS))
         return;
-    char path[PATH_MAX], m[NAME_MAX + 128], name[NAME_MAX + 1];
+    char path[PATH_MAX], m[NAME_MAX + 160], name[NAME_MAX + 1];
     snprintf(name, sizeof name, "%s", items[sel].name);
     join(path, sizeof path, cwd, name);
-    snprintf(m, sizeof m, "Are you sure you want to send \"%s\" to the Recycle Bin?", name);
-    if (!ask("Delete", "recycle", m, "Yes", "No"))
+    int gone = in_trash();
+    if (gone)
+        snprintf(m, sizeof m, "Delete \"%s\" for good? This cannot be undone.", name);
+    else
+        snprintf(m, sizeof m, "Send \"%s\" to the Recycle Bin?", name);
+    if (!ask("Delete", "recycle", m, gone ? "Delete" : "Yes", gone ? "Cancel" : "No"))
         return;
     int next = sel + 1 < nitems ? sel + 1 : sel - 1;
     char keep[NAME_MAX + 1] = "";
     if (next >= 0)
         snprintf(keep, sizeof keep, "%s", items[next].name);
-    {
-        char side[PATH_MAX];
-        sidecar_of(path, side, sizeof side);
-        unlink(side);
-    }
-    if (trash(path, name)) {
-        if (errno != EXDEV) {
-            oops("Can't delete \"%s\": %s", name, strerror(errno));
-            return;
-        }
-        snprintf(m, sizeof m, "\"%s\" is on another disk than the Recycle Bin, so it can't go "
-                 "there. Delete it for good?", name);
-        if (!ask("Delete", "recycle", m, "Delete", "Cancel"))
-            return;
-        const char *argv[] = { "rm", "-rf", "--", path, NULL };
-        gint status = 0;
-        GError *e = NULL;
-        if (!g_spawn_sync(cwd, (char **)argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, NULL,
-                          &status, &e) || !g_spawn_check_exit_status(status, NULL)) {
-            oops("\"%s\" couldn't all be deleted.", name);
-            if (e)
-                g_error_free(e);
-        }
-    }
+    char *argv_trash[] = { "rm", "-r", "--", path, NULL };
+    char *argv_gone[] = { "rm", "--reallyDelete", "-rf", "--", path, NULL };
+    if (run_rm(gone ? argv_gone : argv_trash))
+        return;
     reload(keep[0] ? keep : NULL);
+}
+
+static void put_back_item(void)
+{
+    if (sel < 0 || !in_trash())
+        return;
+    char *argv[] = { "rm", "--putBack", items[sel].name, NULL };
+    if (run_rm(argv))
+        return;
+    reload(NULL);
+}
+
+static void empty_trash_here(void)
+{
+    if (!in_trash())
+        return;
+    if (!ask("Empty Trash", "recycle",
+             "Empty the Recycle Bin? Items in it will be deleted for good.",
+             "Empty Trash", "Cancel"))
+        return;
+    char *argv[] = { "rm", "--emptyTrash", NULL };
+    run_rm(argv);
+    reload(NULL);
 }
 
 static void go_back(int forward)
@@ -2922,6 +2954,8 @@ static void do_action(int a)
         break;
     case A_PASTE: paste(); break;
     case A_DELETE: delete_item(); break;
+    case A_PUTBACK: put_back_item(); break;
+    case A_EMPTY: empty_trash_here(); break;
     case A_CLOSE: gtk_widget_destroy(win); break;
     case A_HIDDEN:
         show_hidden = !show_hidden;
@@ -3101,10 +3135,57 @@ static void addr_go(void)
     navigate(path, 1);
 }
 
+/* Drag a selected file (to the Recycle can, or any URI drop). The move
+   itself is the dest's job — `rm` on the can — so we only advertise the
+   path and reload when the drag ends. */
+static char drag_uri[PATH_MAX * 3];
+
+static void on_drag_data_get(GtkWidget *w, GdkDragContext *ctx, GtkSelectionData *data,
+                             guint info, guint time, gpointer d)
+{
+    (void)w;
+    (void)ctx;
+    (void)info;
+    (void)time;
+    (void)d;
+    char *uris[] = { drag_uri, NULL };
+    gtk_selection_data_set_uris(data, uris);
+}
+
+static void on_drag_end(GtkWidget *w, GdkDragContext *ctx, gpointer d)
+{
+    (void)w;
+    (void)ctx;
+    (void)d;
+    dragging = 0;
+    press.kind = T_NONE;
+    reload(sel >= 0 && sel < nitems ? items[sel].name : NULL);
+}
+
+static void start_file_drag(GdkEventMotion *ev)
+{
+    if (sel < 0 || !strcmp(cwd, DISKS) || in_trash())
+        return;
+    char path[PATH_MAX];
+    item_path(sel, path, sizeof path);
+    char *uri = g_filename_to_uri(path, NULL, NULL);
+    if (!uri)
+        return;
+    snprintf(drag_uri, sizeof drag_uri, "%s", uri);
+    g_free(uri);
+    dragging = 1;
+    GtkTargetEntry te = { "text/uri-list", 0, 0 };
+    GtkTargetList *tl = gtk_target_list_new(&te, 1);
+    gtk_drag_begin_with_coordinates(da, tl, GDK_ACTION_MOVE, 1, (GdkEvent *)ev, -1, -1);
+    gtk_target_list_unref(tl);
+}
+
 static gboolean on_button(GtkWidget *w, GdkEventButton *ev, gpointer d)
 {
     (void)d;
     double x = ev->x / K, y = ev->y / K;
+    press_x = x;
+    press_y = y;
     struct target t = hit(x, y);
     if (ev->type == GDK_BUTTON_RELEASE) {
         if (press.kind == T_TOOL && t.kind == T_TOOL && t.idx == press.idx && ev->button == 1)
@@ -3212,6 +3293,13 @@ static gboolean on_motion(GtkWidget *w, GdkEventMotion *ev, gpointer d)
         relayout();
         redraw();
         return TRUE;
+    }
+    if (!dragging && press.kind == T_FILE && sel >= 0 && (ev->state & GDK_BUTTON1_MASK)) {
+        double dx = x - press_x, dy = y - press_y;
+        if (dx * dx + dy * dy > 64) {
+            start_file_drag(ev);
+            return TRUE;
+        }
     }
     struct target t = hit(x, y);
     if (pop.win && pop_menubar >= 0 && t.kind == T_MENU && t.idx != pop_menubar)
@@ -3444,6 +3532,8 @@ int main(int argc, char **argv)
     gtk_window_set_default_size(GTK_WINDOW(win), (int)(DEF_W * K), (int)(DEF_H * K));
     gtk_widget_set_size_request(da, (int)(400 * K), (int)(260 * K));
     g_signal_connect(da, "draw", G_CALLBACK(on_draw), NULL);
+    g_signal_connect(da, "drag-data-get", G_CALLBACK(on_drag_data_get), NULL);
+    g_signal_connect(da, "drag-end", G_CALLBACK(on_drag_end), NULL);
     g_signal_connect(da, "button-press-event", G_CALLBACK(on_button), NULL);
     g_signal_connect(da, "button-release-event", G_CALLBACK(on_button), NULL);
     g_signal_connect(da, "motion-notify-event", G_CALLBACK(on_motion), NULL);

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Text Editor
+Comment=Edit plain text
+Exec=geany
+Icon=text-editor
+Terminal=false
+Categories=Utility;TextEditor;

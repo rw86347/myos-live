@@ -8,9 +8,13 @@
  * open a sub-page (General > About), and Back returns.
  *
  * The panes, grouped and ordered as on the Mac: Wi-Fi, Network; General
- * (About, Storage, Date & Time), Displays; Users & Groups (Add User…, with
- * an administrator's password: myos-adduser.c); Mouse & Keyboard. Wi-Fi is
- * listed although MyOS can't drive Wi-Fi yet, and says so.
+ * (About, Storage, Date & Time), Displays, Wallpaper; Users & Groups (Add
+ * User…, with an administrator's password: myos-adduser.c); Mouse & Keyboard.
+ * Wi-Fi is listed although MyOS can't drive Wi-Fi yet, and says so.
+ * Wallpaper is the Mac's page: the picture as it looks now, Fill Screen and
+ * the other fits, Add Photo…, then the pictures and a row of colours.
+ * Choosing one writes ~/.config/myos/desktop.conf and tells myos-desktop,
+ * which paints it (the pixmap has to outlive this window).
  * Displays is where the desktop's size is chosen: five pictures from
  * "Larger Text" to "More Space", as on the Mac; Mouse & Keyboard is where
  * the pointer's size is. Both go to myos-xsettings (see myos-xsettings.c),
@@ -41,6 +45,7 @@
 #include <unistd.h>
 
 #include "scale.h"
+#include "wallpaper.h"
 
 /* --- the scale ---------------------------------------------------------------- */
 
@@ -113,12 +118,12 @@ static void rgb(cairo_t *cr, uint32_t c)
 /* The Mac's settings icons: a white symbol on a coloured rounded square,
    lighter at the top. Drawn, not loaded, so they're sharp at every scale. */
 enum icon { IC_NETWORK, IC_GENERAL, IC_DISPLAYS, IC_USERS, IC_ABOUT, IC_STORAGE, IC_CLOCK, IC_ETHERNET,
-            IC_MOUSE, IC_WIFI };
+            IC_MOUSE, IC_WIFI, IC_WALLPAPER };
 
 static const uint32_t icon_colour[] = {
     [IC_NETWORK] = 0x2d7cf6, [IC_GENERAL] = 0x8e8e93, [IC_DISPLAYS] = 0x1c9ef0, [IC_USERS] = 0x5e5ce6,
     [IC_ABOUT] = 0x8e8e93,   [IC_STORAGE] = 0x8e8e93, [IC_CLOCK] = 0x2d7cf6,    [IC_ETHERNET] = 0x2d7cf6,
-    [IC_MOUSE] = 0x8e8e93,   [IC_WIFI] = 0x2d7cf6,
+    [IC_MOUSE] = 0x8e8e93,   [IC_WIFI] = 0x2d7cf6,    [IC_WALLPAPER] = 0x5ac8fa,
 };
 
 static void draw_glyph(cairo_t *cr, enum icon ic, double s)
@@ -229,6 +234,17 @@ static void draw_glyph(cairo_t *cr, enum icon ic, double s)
         cairo_move_to(cr, s * .32, s * .42);
         cairo_line_to(cr, s * .68, s * .42);
         cairo_stroke(cr);
+        break;
+    case IC_WALLPAPER:                  /* a sun and two hills, the Mac's picture */
+        cairo_arc(cr, s * .68, s * .32, s * .08, 0, 2 * M_PI);
+        cairo_fill(cr);
+        cairo_move_to(cr, s * .16, s * .76);
+        cairo_line_to(cr, s * .40, s * .46);
+        cairo_line_to(cr, s * .54, s * .60);
+        cairo_line_to(cr, s * .68, s * .42);
+        cairo_line_to(cr, s * .86, s * .76);
+        cairo_close_path(cr);
+        cairo_fill(cr);
         break;
     }
 }
@@ -1263,6 +1279,306 @@ static void page_users(GtkWidget *page)
                        FALSE, FALSE, 0);
 }
 
+/* --- Wallpaper -----------------------------------------------------------------------------
+   The Mac's Wallpaper page: a large preview with the fit menu on it
+   (Fill Screen, Fit to Screen, Stretch, Center, Tile), Add Photo…, then
+   the pictures and a row of colours. myos-desktop paints the result. */
+
+static struct wall shown_wall;
+static int wall_gen;
+
+static void show(const char *id);
+
+/* myos-desktop is waiting on this. It paints the new picture and keeps
+   the pixmap, which would vanish if this program owned it and then quit. */
+static gboolean wall_refresh(gpointer unused)
+{
+    (void)unused;
+    show("wallpaper");
+    return G_SOURCE_REMOVE;
+}
+
+static void wall_publish(const struct wall *c)
+{
+    shown_wall = *c;
+    wall_write(c);
+    Display *d = gdk_x11_get_default_xdisplay();
+    long v = ++wall_gen;
+    Atom a = XInternAtom(d, "_MYOS_WALLPAPER", False);
+    XChangeProperty(d, DefaultRootWindow(d), a, XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&v, 1);
+    XFlush(d);
+    /* Rebuilding the page now would destroy the control whose signal is
+       still running. Do it once that returns. */
+    g_idle_add(wall_refresh, NULL);
+}
+
+static gboolean draw_wall_preview(GtkWidget *w, cairo_t *cr, gpointer unused)
+{
+    (void)unused;
+    double W = gtk_widget_get_allocated_width(w), H = gtk_widget_get_allocated_height(w);
+    double aspect = screen_h > 0 ? (double)screen_w / screen_h : 1.6;
+    double aw = W - S(8), ah = aw / aspect;
+    if (ah > H - S(8)) {
+        ah = H - S(8);
+        aw = ah * aspect;
+    }
+    double x = (W - aw) / 2, y = (H - ah) / 2;
+    cairo_save(cr);
+    rounded(cr, x, y, aw, ah, S(10));
+    cairo_clip(cr);
+    wall_paint(cr, x, y, aw, ah, &shown_wall);
+    cairo_restore(cr);
+    rounded(cr, x, y, aw, ah, S(10));
+    cairo_set_source_rgba(cr, 0, 0, 0, 0.18);
+    cairo_set_line_width(cr, 1);
+    cairo_stroke(cr);
+    return TRUE;
+}
+
+static void wall_mode_changed(GtkComboBox *box, gpointer unused)
+{
+    (void)unused;
+    int m = gtk_combo_box_get_active(box);
+    if (m < 0 || m == shown_wall.mode)
+        return;
+    shown_wall.mode = m;
+    wall_publish(&shown_wall);
+}
+
+static void wall_pick_image(const char *path)
+{
+    struct wall c = shown_wall;
+    snprintf(c.image, sizeof c.image, "%s", path);
+    c.color[0] = 0;
+    wall_publish(&c);
+}
+
+static void wall_pick_color(const char *hex)
+{
+    struct wall c = shown_wall;
+    c.image[0] = 0;
+    snprintf(c.color, sizeof c.color, "%s", hex);
+    wall_publish(&c);
+}
+
+static void wall_add_photo(GtkButton *b, gpointer unused)
+{
+    (void)b, (void)unused;
+    GtkWidget *top = gtk_widget_get_toplevel(GTK_WIDGET(b));
+    GtkWidget *dlg = gtk_file_chooser_dialog_new(
+        "Add Photo", GTK_IS_WINDOW(top) ? GTK_WINDOW(top) : NULL, GTK_FILE_CHOOSER_ACTION_OPEN, "Cancel",
+        GTK_RESPONSE_CANCEL, "Add", GTK_RESPONSE_ACCEPT, NULL);
+    GtkFileFilter *filt = gtk_file_filter_new();
+    gtk_file_filter_set_name(filt, "Pictures");
+    gtk_file_filter_add_pixbuf_formats(filt);
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dlg), filt);
+    if (gtk_dialog_run(GTK_DIALOG(dlg)) != GTK_RESPONSE_ACCEPT) {
+        gtk_widget_destroy(dlg);
+        return;
+    }
+    char *src = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
+    gtk_widget_destroy(dlg);
+    if (!src)
+        return;
+    /* The theme's own picture is used where it stands. Anything else is
+       copied into the account, so deleting the original doesn't blank
+       the desktop. */
+    if (!strcmp(src, WALL_THEME) || !strncmp(src, WALL_SHARE "/", sizeof WALL_SHARE)) {
+        wall_pick_image(src);
+        g_free(src);
+        return;
+    }
+    char dir[PATH_MAX];
+    snprintf(dir, sizeof dir, "%s/.local/share/myos/wallpapers", wall_home());
+    wall_mkdir(dir);
+    if (!strncmp(src, dir, strlen(dir))) {
+        wall_pick_image(src);
+        g_free(src);
+        return;
+    }
+    char *base = g_path_get_basename(src);
+    char dest[PATH_MAX];
+    snprintf(dest, sizeof dest, "%s/%s", dir, base);
+    for (int n = 2; g_file_test(dest, G_FILE_TEST_EXISTS) && n < 100; n++) {
+        const char *dot = strrchr(base, '.');
+        if (dot)
+            snprintf(dest, sizeof dest, "%s/%.*s %d%s", dir, (int)(dot - base), base, n, dot);
+        else
+            snprintf(dest, sizeof dest, "%s/%s %d", dir, base, n);
+    }
+    GFile *from = g_file_new_for_path(src), *to = g_file_new_for_path(dest);
+    gboolean ok = g_file_copy(from, to, G_FILE_COPY_NONE, NULL, NULL, NULL, NULL);
+    g_object_unref(from);
+    g_object_unref(to);
+    g_free(base);
+    g_free(src);
+    if (ok)
+        wall_pick_image(dest);
+}
+
+static gboolean draw_wall_thumb(GtkWidget *w, cairo_t *cr, gpointer data)
+{
+    const char *path = data;
+    double W = gtk_widget_get_allocated_width(w), H = gtk_widget_get_allocated_height(w);
+    int on = shown_wall.color[0] == 0 && !strcmp(path, shown_wall.image);
+    if (on) {
+        rounded(cr, 0, 0, W, H, S(8));
+        rgb(cr, 0x0a64d6);
+        cairo_fill(cr);
+    }
+    double pad = on ? S(3) : 0;
+    GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_size(path, (int)(W - 2 * pad), (int)(H - 2 * pad), NULL);
+    if (pb) {
+        double tw = gdk_pixbuf_get_width(pb), th = gdk_pixbuf_get_height(pb);
+        cairo_save(cr);
+        rounded(cr, pad + (W - 2 * pad - tw) / 2, pad, tw, th, S(6));
+        cairo_clip(cr);
+        gdk_cairo_set_source_pixbuf(cr, pb, pad + (W - 2 * pad - tw) / 2, pad + (H - 2 * pad - th) / 2);
+        cairo_paint(cr);
+        cairo_restore(cr);
+        g_object_unref(pb);
+    }
+    return TRUE;
+}
+
+static void wall_thumb_clicked(GtkButton *b, gpointer data)
+{
+    (void)b;
+    wall_pick_image(data);
+}
+
+static void wall_add_thumb(GtkWidget *flow, const char *path);
+
+static int wall_name_cmp(const void *a, const void *b)
+{
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+/* Every picture in dir, by name. Hidden files are skipped. */
+static void wall_add_dir(GtkWidget *flow, const char *dir)
+{
+    GDir *gd = g_dir_open(dir, 0, NULL);
+    if (!gd)
+        return;
+    char **names = NULL;
+    int n = 0;
+    const char *name;
+    while ((name = g_dir_read_name(gd))) {
+        if (name[0] == '.')
+            continue;
+        names = g_renew(char *, names, n + 1);
+        names[n++] = g_strdup(name);
+    }
+    g_dir_close(gd);
+    if (n)
+        qsort(names, (size_t)n, sizeof *names, wall_name_cmp);
+    for (int i = 0; i < n; i++) {
+        char path[PATH_MAX];
+        snprintf(path, sizeof path, "%s/%s", dir, names[i]);
+        wall_add_thumb(flow, path);
+        g_free(names[i]);
+    }
+    g_free(names);
+}
+
+static void wall_add_thumb(GtkWidget *flow, const char *path)
+{
+    if (!path || !g_file_test(path, G_FILE_TEST_IS_REGULAR))
+        return;
+    GtkWidget *b = gtk_button_new();
+    gtk_style_context_add_class(gtk_widget_get_style_context(b), "thumb");
+    GtkWidget *d = gtk_drawing_area_new();
+    gtk_widget_set_size_request(d, S(112), S(70));
+    g_signal_connect_data(d, "draw", G_CALLBACK(draw_wall_thumb), g_strdup(path), free_data, 0);
+    gtk_container_add(GTK_CONTAINER(b), d);
+    g_signal_connect_data(b, "clicked", G_CALLBACK(wall_thumb_clicked), g_strdup(path), free_data, 0);
+    gtk_container_add(GTK_CONTAINER(flow), b);
+}
+
+static gboolean draw_color_dot(GtkWidget *w, cairo_t *cr, gpointer data)
+{
+    const char *hex = data;
+    double s = gtk_widget_get_allocated_height(w);
+    int on = shown_wall.image[0] == 0 && !strcmp(hex, shown_wall.color);
+    if (on) {
+        cairo_arc(cr, s / 2, s / 2, s / 2 - 1, 0, 2 * G_PI);
+        rgb(cr, 0x0a64d6);
+        cairo_fill(cr);
+    }
+    unsigned rgbv = (unsigned)strtoul(hex + 1, NULL, 16);
+    cairo_arc(cr, s / 2, s / 2, s / 2 - (on ? S(3) : 1), 0, 2 * G_PI);
+    cairo_set_source_rgb(cr, (rgbv >> 16 & 255) / 255.0, (rgbv >> 8 & 255) / 255.0, (rgbv & 255) / 255.0);
+    cairo_fill(cr);
+    return TRUE;
+}
+
+static void wall_color_clicked(GtkButton *b, gpointer data)
+{
+    (void)b;
+    wall_pick_color(data);
+}
+
+static void page_wallpaper(GtkWidget *page)
+{
+    wall_read(&shown_wall);
+    GtkWidget *overlay = gtk_overlay_new();
+    GtkWidget *preview = gtk_drawing_area_new();
+    gtk_widget_set_size_request(preview, -1, S(210));
+    gtk_widget_set_hexpand(preview, TRUE);
+    g_signal_connect(preview, "draw", G_CALLBACK(draw_wall_preview), NULL);
+    gtk_container_add(GTK_CONTAINER(overlay), preview);
+    GtkWidget *mode = gtk_combo_box_text_new();
+    for (int i = 0; i < WALL_NMODE; i++)
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(mode), wall_labels[i]);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(mode), shown_wall.mode);
+    g_signal_connect(mode, "changed", G_CALLBACK(wall_mode_changed), NULL);
+    gtk_widget_set_halign(mode, GTK_ALIGN_END);
+    gtk_widget_set_valign(mode, GTK_ALIGN_END);
+    gtk_widget_set_margin_end(mode, S(16));
+    gtk_widget_set_margin_bottom(mode, S(12));
+    gtk_overlay_add_overlay(GTK_OVERLAY(overlay), mode);
+    gtk_box_pack_start(GTK_BOX(page), overlay, FALSE, FALSE, 0);
+
+    GtkWidget *add = gtk_button_new_with_label("Add Photo\u2026");
+    gtk_widget_set_halign(add, GTK_ALIGN_START);
+    g_signal_connect(add, "clicked", G_CALLBACK(wall_add_photo), NULL);
+    gtk_box_pack_start(GTK_BOX(page), add, FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(page), label_new("Desktop Pictures", "section", 0), FALSE, FALSE, 0);
+    GtkWidget *flow = gtk_flow_box_new();
+    gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(flow), GTK_SELECTION_NONE);
+    gtk_flow_box_set_homogeneous(GTK_FLOW_BOX(flow), TRUE);
+    gtk_flow_box_set_min_children_per_line(GTK_FLOW_BOX(flow), 3);
+    gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(flow), 6);
+    gtk_flow_box_set_column_spacing(GTK_FLOW_BOX(flow), (guint)S(8));
+    gtk_flow_box_set_row_spacing(GTK_FLOW_BOX(flow), (guint)S(8));
+    wall_add_thumb(flow, WALL_THEME);
+    wall_add_dir(flow, WALL_SHARE);
+    char dir[PATH_MAX];
+    snprintf(dir, sizeof dir, "%s/.local/share/myos/wallpapers", wall_home());
+    wall_add_dir(flow, dir);
+    /* A picture added from somewhere else (an older choice) still shows. */
+    if (shown_wall.image[0] && strcmp(shown_wall.image, WALL_THEME) && !strstr(shown_wall.image, "/myos/wallpapers/"))
+        wall_add_thumb(flow, shown_wall.image);
+    gtk_box_pack_start(GTK_BOX(page), flow, FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(page), label_new("Colors", "section", 0), FALSE, FALSE, 0);
+    static const char *const colors[] = {"#0a84ff", "#5e5ce6", "#bf5af2", "#ff375f", "#ff9f0a",
+                                         "#ffd60a", "#30d158", "#8e8e93", "#1d1d1f"};
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(10));
+    for (size_t i = 0; i < sizeof colors / sizeof colors[0]; i++) {
+        GtkWidget *b = gtk_button_new();
+        gtk_style_context_add_class(gtk_widget_get_style_context(b), "thumb");
+        GtkWidget *d = gtk_drawing_area_new();
+        gtk_widget_set_size_request(d, S(28), S(28));
+        g_signal_connect_data(d, "draw", G_CALLBACK(draw_color_dot), g_strdup(colors[i]), free_data, 0);
+        gtk_container_add(GTK_CONTAINER(b), d);
+        g_signal_connect_data(b, "clicked", G_CALLBACK(wall_color_clicked), g_strdup(colors[i]), free_data, 0);
+        gtk_box_pack_start(GTK_BOX(row), b, FALSE, FALSE, 0);
+    }
+    gtk_box_pack_start(GTK_BOX(page), row, FALSE, FALSE, 0);
+}
+
 /* --- the window ------------------------------------------------------------------------------- */
 
 struct page {
@@ -1279,6 +1595,8 @@ static const struct page pages[] = {
     {"general", "General", NULL, page_general, IC_GENERAL, "about storage disk date time clock"},
     {"displays", "Displays", NULL, page_displays, IC_DISPLAYS,
      "scale scaling size text bigger larger smaller resolution screen monitor hidpi retina"},
+    {"wallpaper", "Wallpaper", NULL, page_wallpaper, IC_WALLPAPER,
+     "wallpaper background picture image photo desktop fill screen color"},
     {"mouse", "Mouse & Keyboard", NULL, page_mouse, IC_MOUSE,
      "pointer cursor arrow size bigger larger mouse keyboard shortcuts keys"},
     {"usersgroups", "Users & Groups", NULL, page_users, IC_USERS, "account people login password admin add new user"},
@@ -1442,7 +1760,10 @@ static void build_sidebar(void)
     /* The Mac's groups, in its order: Wi-Fi and Network first; General and
        Displays; Users & Groups with the security panes; the input devices
        (Keyboard, Trackpad there) last. */
-    static const char *const groups[][4] = {{"wifi", "network"}, {"general", "displays"}, {"usersgroups"}, {"mouse"}};
+    static const char *const groups[][4] = {{"wifi", "network"},
+                                            {"general", "displays", "wallpaper"},
+                                            {"usersgroups"},
+                                            {"mouse"}};
     for (size_t gi = 0; gi < sizeof groups / sizeof groups[0]; gi++) {
         sidebar_gap();
         for (int j = 0; j < 4 && groups[gi][j]; j++) {

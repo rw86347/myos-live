@@ -1,0 +1,7 @@
+[Desktop Entry]
+# xterm's Unicode twin: the same terminal as Terminal (bash). Hidden here so
+# All Programs doesn't list it from /usr/share/applications a second time.
+Type=Application
+Name=UXTerm
+Exec=uxterm
+Hidden=true

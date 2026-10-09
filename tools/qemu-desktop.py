@@ -12,7 +12,8 @@ one command per line (# starts a comment):
   key NAME         one key, QEMU's names (ret, tab, minus, a, ...)
   until TEXT | KEY press KEY every 3 s until the serial log shows TEXT (up
                    to a minute): for a screen that may not take keys yet
-  type TEXT        letters, digits and '-', one key each
+  type TEXT        any text on the US keyboard (tools/qemu-type.sh's keys),
+                   one key each; no Enter (`key ret`)
   corner           the pointer to the screen's top-left corner
   move DX DY       the pointer by DX, DY pixels
   moveto X Y       the pointer to X, Y, checked: it looks where the pointer
@@ -21,25 +22,74 @@ one command per line (# starts a comment):
   click            the left button
   shot NAME        the screen to SHOT_DIR/NAME.png
 
+and, from inside the machine, over ssh:
+
+  sshkey [USER]    let this tool in: types a one-time public key into the
+                   window that has the keyboard (a terminal: `key ctrl-alt-t`
+                   first) and waits until ssh works. USER is the one logged
+                   in, "myos" if left out. The key is made once, in SHOT_DIR.
+  sh COMMAND       run COMMAND there (the user's shell); its output is
+                   printed, and the run stops if it fails. A program that
+                   keeps running: `sh DISPLAY=:0 setsid -f prog >/dev/null 2>&1`
+  xdo ARGS         xdotool ARGS on the desktop (DISPLAY=:0): exact and in
+                   one step, where move/moveto creep and check —
+                     xdo mousemove 412 640 click 1
+                     xdo key ctrl+s
+                     xdo search --name 'Install MyOS' getwindowgeometry
+                   (`xdo type` only for plain ASCII: see `text`)
+  text TEXT        type TEXT, any characters (Grüße, 世界), where the
+                   keyboard is. ASCII goes through `xdotool type`; each other
+                   character is its Unicode keysym (`xdotool key U4E16`),
+                   200 ms apart. xdotool gives it a spare key code for the
+                   moment, and a program that reads the key before it has
+                   seen the new mapping loses it. `xdotool type` loses them
+                   all here even when slowed down.
+  get PATH [NAME]  copy the file PATH out to SHOT_DIR/NAME (its own name if
+                   NAME is left out)
+
 The machine: 4 GiB, no PIT, a Cirrus card (so the firmware's 800x600
 framebuffer, simplefb), as in make test-uefi-login. The pointer is a PS/2
 mouse and moves are relative, and X speeds up fast moves, so `move` goes in
 4-pixel steps 50 ms apart, along one axis at a time, which X takes 1:1 —
 nearly always: QEMU sometimes hands two over at once and X speeds that up,
-so `moveto` checks the result on the screen.
+so `moveto` checks the result on the screen. `xdo` doesn't go through the
+mouse at all: X's test extension puts the pointer where it is told.
+
+The disk is opened with snapshot=on: nothing a run does is written to IMG
+(so the ssh key never stays on a disk that might be copied to a stick).
+A script that uses sshkey, sh, xdo or get gets a network card (e1000, QEMU's
+user network) whose ssh port is forwarded to a free port on this Mac;
+otherwise there is none. The serial and monitor ports are free ones too, so
+two runs can go at once.
 """
-import os, socket, subprocess, sys, time
+import os, shlex, socket, subprocess, sys, time
 
 img, script, serial_log, shot_dir, ovmf_code, ovmf_vars = sys.argv[1:7]
 vars_copy = os.path.join(shot_dir, 'desktop-ovmf-vars.fd')
 subprocess.run(['cp', ovmf_vars, vars_copy], check=True)
-SER, MON = 45454, 45455
+TOOLS = os.path.dirname(os.path.abspath(__file__))
+
+
+def free_port():
+    s = socket.socket()
+    s.bind(('127.0.0.1', 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+lines = [l.split('#', 1)[0].strip() for l in open(script)]
+lines = [l for l in lines if l]
+want_ssh = any(l.split()[0] in ('sshkey', 'sh', 'xdo', 'text', 'get') for l in lines)
+SER, MON, SSH = free_port(), free_port(), free_port()
+net = (['-netdev', 'user,id=net0,hostfwd=tcp:127.0.0.1:%d-:22' % SSH, '-device', 'e1000,netdev=net0']
+       if want_ssh else ['-net', 'none'])
 q = subprocess.Popen(['qemu-system-x86_64', '-machine', 'q35,pit=off', '-m', '4G', '-cpu', 'qemu64',
                       '-vga', 'cirrus',
                       '-drive', 'if=pflash,format=raw,readonly=on,file=' + ovmf_code,
                       '-drive', 'if=pflash,format=raw,file=' + vars_copy,
-                      '-drive', 'if=none,format=raw,file=' + img + ',id=bootdisk',
-                      '-device', 'ide-hd,drive=bootdisk,bootindex=0', '-net', 'none', '-no-reboot',
+                      '-drive', 'if=none,format=raw,file=' + img + ',id=bootdisk,snapshot=on',
+                      '-device', 'ide-hd,drive=bootdisk,bootindex=0'] + net + ['-no-reboot',
                       '-display', 'none', '-serial', 'tcp:127.0.0.1:%d,server=on,wait=on' % SER,
                       '-monitor', 'tcp:127.0.0.1:%d,server=on,wait=off' % MON],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -141,11 +191,68 @@ def steps(dx, dy, size=4):
             d -= n
 
 
+def type_text(text):
+    """One sendkey per character, the keys tools/qemu-type.sh knows (it
+    adds an Enter at the end, which is left off here)."""
+    keys = subprocess.run([os.path.join(TOOLS, 'qemu-type.sh'), text], capture_output=True,
+                          text=True, check=True).stdout.split('\n')
+    for k in keys[:-2]:                 # (the last two: "sendkey ret" and "")
+        monitor(k, 0.1)
+
+
+key_file = os.path.join(shot_dir, 'desktop-key')
+ssh_user = 'myos'
+
+
+def guest(cmd, out_path=None, timeout=120):
+    """Run cmd in the machine over ssh: (exit status, output). The serial
+    port is read meanwhile, so the machine never waits on a full buffer;
+    the output goes to a file, so a big one can't fill a pipe and stall."""
+    out_path = out_path or os.path.join(shot_dir, 'desktop-ssh.out')
+    with open(out_path, 'wb') as out:
+        p = subprocess.Popen(['ssh', '-i', key_file, '-p', str(SSH), '-o', 'IdentitiesOnly=yes',
+                              '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+                              '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null',
+                              '-o', 'LogLevel=ERROR', ssh_user + '@127.0.0.1', cmd],
+                             stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
+        end = time.time() + timeout
+        while p.poll() is None:
+            if time.time() > end:
+                p.kill()
+                p.wait()
+                return 124, b'(timed out)'
+            pump(0.2)
+    return p.returncode, open(out_path, 'rb').read()
+
+
+def guest_ok(cmd):
+    """guest(), printing what it said; the run stops if cmd failed."""
+    rc, out = guest(cmd)
+    text = out.decode(errors='replace').rstrip()
+    print('$ ' + cmd + ('\n' + text if text else ''), flush=True)
+    if rc:
+        sys.exit('qemu-desktop: failed (%d): %s' % (rc, cmd))
+
+
+def sshkey(user):
+    global ssh_user
+    ssh_user = user or 'myos'
+    if not os.path.exists(key_file):
+        subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-C', 'qemu-desktop',
+                        '-f', key_file], check=True)
+    pub = open(key_file + '.pub').read().strip()
+    type_text("mkdir -p ~/.ssh && echo '%s' >> ~/.ssh/authorized_keys" % pub)
+    monitor('sendkey ret', 0.2)
+    end = time.time() + 90              # sshd may still be starting
+    while time.time() < end:
+        if guest('true', timeout=15)[0] == 0:
+            return
+        pump(3)
+    sys.exit('qemu-desktop: ssh never let us in (as %s, port %d)' % (ssh_user, SSH))
+
+
 try:
-    for line in open(script):
-        line = line.split('#', 1)[0].strip()
-        if not line:
-            continue
+    for line in lines:
         op, _, arg = line.partition(' ')
         if op == 'expect':
             end = time.time() + 240
@@ -166,8 +273,7 @@ try:
         elif op == 'key':
             monitor('sendkey ' + arg, 0.2)
         elif op == 'type':
-            for ch in arg:
-                monitor('sendkey ' + ('minus' if ch == '-' else ch), 0.1)
+            type_text(arg)
         elif op == 'corner':
             for _ in range(20):
                 monitor('mouse_move -100 -100')
@@ -189,6 +295,32 @@ try:
                 os.remove(ppm)
             except ImportError:
                 pass                    # (no Pillow: keep the .ppm)
+        elif op == 'sshkey':
+            sshkey(arg)
+        elif op == 'sh':
+            guest_ok(arg)
+        elif op == 'xdo':
+            guest_ok('DISPLAY=:0 xdotool ' + arg)
+        elif op == 'text':
+            runs, i = [], 0             # alternate: ASCII with type, the rest with key
+            while i < len(arg):
+                j = i
+                ascii = ord(arg[i]) < 128
+                while j < len(arg) and (ord(arg[j]) < 128) == ascii:
+                    j += 1
+                part = arg[i:j]
+                runs.append('xdotool type -- ' + shlex.quote(part) if ascii else
+                            'xdotool key --delay 200 ' + ' '.join('U%04X' % ord(c) for c in part))
+                i = j
+            guest_ok('export DISPLAY=:0; ' + ' && '.join(runs))
+        elif op == 'get':
+            path, _, name = arg.partition(' ')
+            dest = os.path.join(shot_dir, name or os.path.basename(path))
+            rc, _ = guest('cat ' + shlex.quote(path), out_path=dest)
+            if rc:
+                sys.exit('qemu-desktop: could not get %s (%d): %s'
+                         % (path, rc, open(dest, 'rb').read(200).decode(errors='replace')))
+            print('got %s -> %s' % (path, dest), flush=True)
         else:
             sys.exit('qemu-desktop: unknown command: ' + line)
 finally:

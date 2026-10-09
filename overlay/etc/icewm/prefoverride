@@ -1,0 +1,10 @@
+# /etc/icewm/prefoverride — settings IceWM must always have.
+#
+# IceWM reads these after its preferences file and the theme, and they win
+# over both: no user preferences file, theme or program can turn them back.
+# (IceWM uses the first preferences file it finds, ~/.icewm before
+# /etc/icewm, so a stray user file can hide /etc/icewm/preferences.)
+#
+# Workspaces are never shown on the taskbar. They still exist: Mission
+# Control will show them above the screen, as on the Mac.
+TaskBarShowWorkspaces=0

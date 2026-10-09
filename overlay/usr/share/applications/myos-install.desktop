@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Install MyOS
+Comment=Copy MyOS from this stick onto the computer's own disk
+Exec=myos-install
+Icon=drive-harddisk
+Categories=System;Settings;
+Keywords=install;setup;disk;

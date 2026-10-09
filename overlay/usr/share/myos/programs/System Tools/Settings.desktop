@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+Comment=Displays, network, users and this computer
+Exec=myos-settings
+Icon=settings
+Terminal=false
+Categories=Settings;System;

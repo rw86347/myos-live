@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=LibreOffice Writer
+Comment=Word processor
+Exec=libreoffice --writer
+Icon=text-editor
+Terminal=false
+Categories=Office;WordProcessor;

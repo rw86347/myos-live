@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AbiWord
+Comment=Write documents
+Exec=abiword
+Icon=text-editor
+Terminal=false
+Categories=Office;WordProcessor;

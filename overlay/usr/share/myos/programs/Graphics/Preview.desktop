@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Preview
+Comment=PDFs and pictures
+Exec=myos-preview
+Icon=preview
+Terminal=false
+Categories=Graphics;Viewer;

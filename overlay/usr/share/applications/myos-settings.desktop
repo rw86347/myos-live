@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=Settings
-Comment=Displays, network, users and information about this computer
+Comment=Displays, wallpaper, network, users and information about this computer
 Exec=myos-settings
 Icon=preferences-system
 Categories=Settings;System;
-Keywords=display;scale;resolution;network;users;about;
+Keywords=display;scale;resolution;wallpaper;background;network;users;about;

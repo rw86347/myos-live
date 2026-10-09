@@ -182,7 +182,8 @@ def menu_button():
 ICEWM_ICONS = [("terminal", "terminal"), ("text-editor", "text-editor"),
                ("logo", "icewm"), ("run", "run"), ("writeperfect", "writeperfect"),
                ("preview", "preview"), ("settings", "settings"), ("folder", "folder"),
-               ("web-browser", "firefox"), ("web-browser", "Navigator")]
+               ("web-browser", "firefox"), ("web-browser", "Navigator"),
+               ("web-browser", "chromium")]
 ICON_SIZES = (16, 18, 32, 48)       # menus, title bars and taskbar, Alt+Tab
 
 # Programs that bring their own icon rather than one from the set.
@@ -521,15 +522,16 @@ def login_pictures():
 # whole menu once, and each entry once more as it looks under the mouse.
 # The program only adds the user's name and swaps those pieces in.
 #
-# Only entries that do something are listed. The mockup's Disks, Network,
-# Help and All Programs come back as the programs behind them are written.
+# All Programs is the last row of the left column, as in the mockup and in
+# Windows XP. The folders it opens are not pictures: myos-menu reads them
+# from /usr/share/myos/programs when the menu opens.
 
 MENU_W = 390
 MENU_PAD = 8            # room above the menu for its shadow
 MENU_LEFT = [           # (icon, name, what it does, command)
     ("terminal", "Terminal (bash)", "Command line shell", "xterm"),
     ("my-files", "My Files", "Browse your files", "myos-files"),
-    ("web-browser", "Web Browser", "Browse the web", "firefox"),
+    ("web-browser", "Web Browser", "Browse the web", "myos-browser"),
     ("writeperfect", "WritePerfect", "WordPerfect 5.1 style", "writeperfect"),
     ("text-editor", "AbiWord", "Write documents", "abiword"),
     ("preview", "Preview", "PDFs and pictures", "myos-preview"),
@@ -538,8 +540,10 @@ MENU_RIGHT = [          # (icon, name, command); "@run" is the menu's own box
     ("my-files", "My Files", "myos-files"),
     ("disks", "Disks", "myos-files :disks"),
     ("settings", "Settings", "myos-settings"),
+    ("disks", "Install MyOS", "myos-install"),
     ("run", "Run...", "@run"),
 ]
+PROG_H = 44             # All Programs, the strip above the footer (the mockup's row)
 MENU_FOOT = [           # (icon, name, x, command)
     ("log-off", "Log off", 170, "icesh logout"),
     ("turn-off", "Turn off", 276, "doas /sbin/poweroff"),
@@ -551,12 +555,17 @@ FOOT_HOVER = dict(fill=G("h", (0, "#ffffff", 0.22), (1, "#ffffff", 0.05)), borde
 
 def menu_layout():
     """Where everything goes, in the mockup's numbers; y=0 is the menu's top."""
-    body = max(10 + 60 * len(MENU_LEFT) + 6, 12 + 52 * len(MENU_RIGHT) + 6, 136)
+    left_h = 10 + 60 * len(MENU_LEFT) + 8 + PROG_H
+    right_h = 12 + 52 * len(MENU_RIGHT) + 6
+    body = max(left_h, right_h, 136)
     mh = 56 + body + 46
     rows = []                       # (x, y, w, h, command, how to draw it hovered)
     for k, row in enumerate(MENU_LEFT):
         y = 56 + 10 + k * 60
         rows.append((6, y - 6, 198, 52, row[3], ("left", k)))
+    # All Programs sits on the footer. "@programs" opens the folder flyout
+    # instead of running a command.
+    rows.append((6, mh - 46 - PROG_H + 4, 198, PROG_H - 8, "@programs", ("programs", 0)))
     for k, row in enumerate(MENU_RIGHT):
         y = 56 + 12 + k * 52
         rows.append((216, y - 6, MENU_W - 228, 44, row[2], ("right", k)))
@@ -591,6 +600,15 @@ def menu_svg(hover=None):
         o.append(mt.img(icon, mx + 12, y, 40))
         o.append(mt.text(mx + 60, y + 18, label, 13, hl["text"] if on else None, weight="bold"))
         o.append(mt.text(mx + 60, y + 34, sub, 11, "#e0f4f5" if on else C["text_soft"]))
+    # The divider and All Programs, in the bottom of the left column. The
+    # green arrow is the mockup's; the flyout it stands for is drawn later.
+    div_y = cy1 - PROG_H
+    o.append('<path d="M%d %dh%d" stroke="%s"/>' % (mx + 10, div_y, 190, C["border"]))
+    on = hover == ("programs", 0)
+    if on:
+        o.append(mt.draw_bar(hl, mx + 6, div_y + 4, 198, PROG_H - 8))
+    o.append(mt.text(mx + 16, div_y + 27, "All Programs", 13, hl["text"] if on else None, "bold"))
+    o.append(mt.img("all-programs", mx + 160, div_y + 7, 28))
     for k, (icon, label, _) in enumerate(MENU_RIGHT):
         y = cy0 + 12 + k * 52
         on = hover == ("right", k)
@@ -698,7 +716,20 @@ def start_menu():
     conf.append("tray tray.png")
     conf.append("clock %d %d %d" % (px(105), px(25), px(12)))
     conf.append("icon %d %d %d" % (px(13), px(11), px(18)))   # the docked icon's slot
+    conf.append("volume %d %d %d" % (px(39), px(11), px(18)))  # the speaker (tray_picture)
     open(os.path.join(MENU, "menu.conf"), "w").write("\n".join(conf) + "\n")
+
+
+def icon_pngs():
+    """48 px PNGs of every theme icon. All Programs draws these at runtime
+    (Imlib2 does not render the SVGs My Files uses)."""
+    out = os.path.join(ICONS, "48")
+    os.makedirs(out, exist_ok=True)
+    src = os.path.join(WORK, "icons/svg")
+    for f in sorted(os.listdir(src)):
+        if f.endswith(".svg"):
+            subprocess.run(["rsvg-convert", os.path.join(src, f), "-w", "48", "-h", "48",
+                            "-o", os.path.join(out, f[:-4] + ".png")], check=True)
 
 
 def main():
@@ -714,6 +745,7 @@ def main():
     # My Files draws these itself, sharp at any scale.
     for f in os.listdir(os.path.join(WORK, "icons/svg")):
         shutil.copy(os.path.join(WORK, "icons/svg", f), ICONS)
+    icon_pngs()
 
     for pct in SCALES:
         set_scale(pct)

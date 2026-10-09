@@ -1,0 +1,9 @@
+#!/bin/sh
+# myos-browser — the Web Browser of the menu, the desktop and My Files.
+# Chromium on the 64-bit disk; Firefox on the 32-bit one, because Alpine
+# builds no 32-bit Chromium (live/packages*.txt). One name for every
+# launcher, so neither disk has a browser icon that does nothing.
+if command -v chromium >/dev/null 2>&1; then
+    exec chromium "$@"
+fi
+exec firefox "$@"

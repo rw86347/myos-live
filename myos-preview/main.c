@@ -2796,15 +2796,30 @@ static void on_startup(GApplication *a, gpointer data)
     gtk_window_set_default_icon_name("preview");
 }
 
+static char **cli_files;
+static int cli_n;
+
 static void on_activate(GApplication *a, gpointer data)
 {
+    int i;
     (void)a, (void)data;
-    /* Started with nothing to open: the Open panel, as on the Mac. */
-    if (!windows) {
-        a_open(NULL, NULL, NULL);
-        if (!windows)
-            g_application_quit(G_APPLICATION(app));
+    /* GApplication's "open" needs a session bus. MyOS has no dbus-launch,
+       so a file on the command line (WritePerfect Preview) often never
+       arrives. Open those paths here if "open" did not. */
+    if (!windows && cli_n) {
+        for (i = 0; i < cli_n; i++)
+            win_open_file(cli_files[i]);
     }
+    if (windows)
+        return;
+    if (cli_n) {
+        g_application_quit(G_APPLICATION(app));
+        return;
+    }
+    /* Started with nothing to open: the Open panel, as on the Mac. */
+    a_open(NULL, NULL, NULL);
+    if (!windows)
+        g_application_quit(G_APPLICATION(app));
 }
 
 static void on_open(GApplication *a, GFile **files, int n, const char *hint, gpointer data)
@@ -2820,13 +2835,33 @@ static void on_open(GApplication *a, GFile **files, int n, const char *hint, gpo
 
 int main(int argc, char **argv)
 {
-    /* No D-Bus on MyOS: every start is its own process (NON_UNIQUE). */
-    app = gtk_application_new("org.myos.Preview", G_APPLICATION_NON_UNIQUE | G_APPLICATION_HANDLES_OPEN);
+    int i;
+    cli_files = g_new0(char *, argc);
+    for (i = 1; i < argc; i++) {
+        if (argv[i][0] != '-')
+            cli_files[cli_n++] = g_strdup(argv[i]);
+    }
+    /* No D-Bus on MyOS: every start is its own process (NON_UNIQUE).
+       HANDLES_OPEN is off on purpose — GApplication delivers those files
+       over the session bus, which we do not have. argv files are opened
+       in on_activate from cli_files. */
+    app = gtk_application_new("org.myos.Preview", G_APPLICATION_NON_UNIQUE);
     g_set_application_name("Preview");
     g_signal_connect(app, "startup", G_CALLBACK(on_startup), NULL);
     g_signal_connect(app, "activate", G_CALLBACK(on_activate), NULL);
     g_signal_connect(app, "open", G_CALLBACK(on_open), NULL);
-    int r = g_application_run(G_APPLICATION(app), argc, argv);
+    /* GApplication only sees the options: given file names without
+       HANDLES_OPEN it refuses them ("This application can not open files")
+       and exits before activate — a double-clicked PDF never opened. The
+       files are cli_files, opened in on_activate. */
+    char **gargv = g_new0(char *, argc + 1);
+    int gargc = 0;
+    gargv[gargc++] = argv[0];
+    for (i = 1; i < argc; i++)
+        if (argv[i][0] == '-')
+            gargv[gargc++] = argv[i];
+    int r = g_application_run(G_APPLICATION(app), gargc, gargv);
+    g_free(gargv);
     doc_cleanup();
     g_object_unref(app);
     return r;

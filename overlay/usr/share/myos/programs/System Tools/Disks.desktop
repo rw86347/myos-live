@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Disks
+Comment=Disks on this computer
+Exec=myos-files :disks
+Icon=disks
+Terminal=false
+Categories=System;FileManager;

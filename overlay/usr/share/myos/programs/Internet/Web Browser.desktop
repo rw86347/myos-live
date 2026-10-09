@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Web Browser
+Comment=Browse the web
+Exec=myos-browser %U
+Icon=web-browser
+Terminal=false
+Categories=Network;WebBrowser;

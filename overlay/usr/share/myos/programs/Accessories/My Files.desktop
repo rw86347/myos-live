@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=My Files
+Comment=Browse your files
+Exec=myos-files
+Icon=my-files
+Terminal=false
+Categories=Utility;FileManager;

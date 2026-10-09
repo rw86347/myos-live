@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Claude Code
+Comment=Anthropic's coding assistant
+Exec=xterm -e claude
+Icon=terminal
+Terminal=false
+Categories=Development;

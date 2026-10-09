@@ -36,12 +36,18 @@ mkdir "$mnt/root"
 # (o + combining accent), and Linux programs look names up byte for byte.
 # "fully_trusted" keeps setuid bits and absolute symlinks: it's our tar.
 python3 - "$tar" "$mnt/root" <<'EOF'
-import sys, tarfile
+import os, sys, tarfile
+# Unlink first. Alpine's coreutils is one binary; /bin/rm is a symlink to
+# it. Opening that path to overwrite follows the link and replaces mkdir,
+# chmod, touch and the rest with whatever we meant only for rm.
+dest = sys.argv[2]
+filt = {'filter': 'fully_trusted'} if hasattr(tarfile, 'fully_trusted_filter') else {}
 with tarfile.open(sys.argv[1]) as t:
-    if hasattr(tarfile, 'fully_trusted_filter'):
-        t.extractall(sys.argv[2], filter='fully_trusted')
-    else:
-        t.extractall(sys.argv[2])
+    for m in t:
+        path = os.path.join(dest, m.name)
+        if not m.isdir() and os.path.lexists(path) and not os.path.isdir(path):
+            os.unlink(path)
+        t.extract(m, dest, **filt)
 EOF
 rm -f "$mnt/root/.dummy"
 find "$mnt/root" -name .DS_Store -delete

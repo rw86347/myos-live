@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Player
+Comment=Play movies and music
+Exec=myos-player %F
+Icon=sound
+Terminal=false
+MimeType=video/mp4;video/x-matroska;video/x-msvideo;video/quicktime;video/webm;video/mpeg;audio/mpeg;audio/flac;audio/ogg;audio/x-wav;audio/mp4;
+Categories=AudioVideo;Player;
