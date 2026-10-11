@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # runit runs this each time myos-login exits ($1: its exit code, -1 if a
 # signal killed it). After a logout (0) there is nothing to say. Otherwise
 # put the X server's errors on the screen — a laptop has no serial port to

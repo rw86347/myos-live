@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # /etc/runit/1 — runit's stage 1: bring the machine up, once.
 #
 # Process 1 is runit (/sbin/init -> runit-init). It runs three stages, the

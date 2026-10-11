@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 """qemu-desktop.py — drive a 64-bit MyOS desktop in QEMU like a person:
 keys, the mouse, screenshots, and the serial log to check afterwards.
 

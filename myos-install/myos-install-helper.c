@@ -1,42 +1,89 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * myos-install-helper — the only process that may write a disk.
  *
  * The GTK / --text installer writes a plan (docs/INSTALLER-PLAN.md) and
  * runs this, setuid root, like myos-adduser. We trust nothing from the
- * window: the plan is parsed again, the disk is looked up again, and a
- * world-readable plan with a password is refused.
+ * window: the plan is parsed and checked again, the disk is looked up
+ * again, and only an administrator (group wheel) may run it at all.
  *
  * Progress lines on stdout (the window turns these into the bar):
  *   step <name>
  *   progress <0-100>
- *   file <what is being copied>
+ *   file <what is happening>
  *   ok
  *   error: <sentence>
+ * Everything else (what sfdisk, mke2fs and rsync print) goes to the log,
+ * /tmp/myos-install.log.
  *
  *   myos-install-helper --check PLAN
- *   myos-install-helper --dry-run PLAN
+ *   myos-install-helper --dry-run PLAN      what --apply would do
  *   myos-install-helper --apply PLAN
  *
- * --apply still refuses if the kernel has not published a block device
- * for the chosen disk (the usual case on MyOS today). Nothing is written
- * then; the plan stays in /tmp for a later run.
+ * What --apply does (a UEFI computer; installing for BIOS isn't written):
+ *   partition    sfdisk. Erase: a new GPT with "EFI System", myos-root and
+ *                myos-data. Free space: the same three added after what is
+ *                there (--append), only on a disk with no EFI partition yet.
+ *                Then BLKRRPART, so the kernel's partitions are the new ones.
+ *   filesystems  mke2fs on myos-root and myos-data, found by their GPT names
+ *                (never by guessing numbers).
+ *   boot         myos-mkesp: FAT32 on the new EFI partition, holding a copy
+ *                of the stick's own (EFI/BOOT/BOOTX64.EFI finds the kernel,
+ *                the firmware finds BOOTX64.EFI).
+ *   copy         myos-root at /mnt/myos-root (and myos-data at its /data),
+ *                then rsync of the running system.
+ *   configure    the account, computer name, language, keyboard, clock; the
+ *                live user, the stick's ssh keys and the installer removed.
+ *   finish       everything written to the disk.
+ * Nothing unmounts yet (WORKLIST: umount), so a failed try leaves the disk
+ * mounted: the window then says to restart before trying again.
  */
+#include <crypt.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mount.h>
+#include <sys/random.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "disks.h"
 #include "plan.h"
 
-static FILE *logf;
+#ifndef BLKRRPART
+#define BLKRRPART   0x125F              /* _IO(0x12, 95): read the partition table again */
+#endif
+
+#define NEWROOT     "/mnt/myos-root"
+#define LIVE_ESP    "/mnt/myos-live-esp"
+#define MKESP       "/usr/libexec/myos-mkesp"
+#define ESP_NAME    "EFI System"
+#define GPT_ESP     "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
+#define GPT_LINUX   "0FC63DAF-8483-4772-8E79-3D69D8477DE4"
+#define GB          1000000000ULL       /* the window's sizes are in GB, as disks are sold */
+#define MIB         1048576ULL
+
+static int logfd = -1;
 static int apply;
+
+/* What this run will make, decided once from the disk as it is now. */
+static struct layout {
+    unsigned long long root_mib;
+    int data;                           /* a myos-data partition with the rest */
+    int erase;                          /* a new table, or --append to the old one */
+    unsigned long long before[DISK_PARTS];  /* start sectors that were already there */
+    int nbefore;
+    char esp[64], root[64], datadev[64];    /* found after sfdisk, by GPT name */
+} L;
 
 static void logline(const char *fmt, ...)
 {
@@ -45,13 +92,11 @@ static void logline(const char *fmt, ...)
     vfprintf(stderr, fmt, ap);
     va_end(ap);
     fputc('\n', stderr);
-    fflush(stderr);
-    if (logf) {
+    if (logfd >= 0) {
         va_start(ap, fmt);
-        vfprintf(logf, fmt, ap);
+        vdprintf(logfd, fmt, ap);
         va_end(ap);
-        fputc('\n', logf);
-        fflush(logf);
+        dprintf(logfd, "\n");
     }
 }
 
@@ -65,7 +110,19 @@ static void say(const char *fmt, ...)
     fflush(stdout);
 }
 
-static void fail(const char *fmt, ...)
+/* A step begins: the window's list, and the time so far in the log. */
+static void step(const char *name)
+{
+    static struct timespec t0;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (!t0.tv_sec)
+        t0 = now;
+    say("step %s", name);
+    logline("[%lds] %s", (long)(now.tv_sec - t0.tv_sec), name);
+}
+
+static int fail(const char *fmt, ...)
 {
     char buf[512];
     va_list ap;
@@ -74,28 +131,123 @@ static void fail(const char *fmt, ...)
     va_end(ap);
     say("error: %s", buf);
     logline("error: %s", buf);
+    return -1;
 }
 
-static int runv(char *const argv[])
+/* The log is in /tmp, where anyone may leave a file or a link under its
+   name, and we are root: an old one is removed and a new one made, never
+   followed or written through (O_EXCL). */
+static void open_log(void)
 {
-    pid_t pid;
-    int st;
+    unlink(PLAN_LOG_DEFAULT);
+    logfd = open(PLAN_LOG_DEFAULT, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+}
 
-    logline("+ %s", argv[0]);
+/* Run a program, its output to the log; with `input`, that is its stdin.
+   0 if it exited with 0. Children get the clean environment main() made. */
+static int run_in(char *const argv[], const char *input)
+{
+    char line[512];
+    size_t at = 0;
+    int in[2] = { -1, -1 }, st;
+    pid_t pid;
+
+    for (int i = 0; argv[i] && at < sizeof line - 2; i++)
+        at += (size_t)snprintf(line + at, sizeof line - at, "%s%s", i ? " " : "", argv[i]);
+    logline("+ %s", line);
     if (!apply)
         return 0;
+    if (input && pipe2(in, O_CLOEXEC))
+        return -1;
     pid = fork();
     if (pid < 0)
         return -1;
     if (pid == 0) {
+        int null = open("/dev/null", O_RDWR);
+        dup2(input ? in[0] : null, 0);
+        dup2(logfd >= 0 ? logfd : null, 1);
+        dup2(logfd >= 0 ? logfd : null, 2);
         execvp(argv[0], argv);
         _exit(127);
     }
+    if (input) {
+        close(in[0]);
+        size_t n = strlen(input), done = 0;
+        while (done < n) {
+            ssize_t w = write(in[1], input + done, n - done);
+            if (w <= 0)
+                break;
+            done += (size_t)w;
+        }
+        close(in[1]);
+    }
     if (waitpid(pid, &st, 0) < 0)
         return -1;
-    if (WIFEXITED(st) && WEXITSTATUS(st) == 0)
+    return WIFEXITED(st) && WEXITSTATUS(st) == 0 ? 0 : -1;
+}
+
+static int run(char *const argv[])
+{
+    return run_in(argv, NULL);
+}
+
+/* rsync --info=progress2: its "NN%" becomes our bar, from lo to hi.
+   Lines end in \r while it counts, so both \r and \n end one. */
+static int run_rsync(char *const argv[], int lo, int hi)
+{
+    int out[2], st, shown = -1;
+    char buf[4096], line[256];
+    size_t len = 0;
+    pid_t pid;
+
+    logline("+ rsync (the running system to %s)", NEWROOT);
+    if (!apply)
         return 0;
-    return -1;
+    if (pipe2(out, O_CLOEXEC))
+        return -1;
+    pid = fork();
+    if (pid < 0)
+        return -1;
+    if (pid == 0) {
+        int null = open("/dev/null", O_RDWR);
+        dup2(null, 0);
+        dup2(out[1], 1);
+        dup2(logfd >= 0 ? logfd : null, 2);
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+    close(out[1]);
+    for (;;) {
+        ssize_t n = read(out[0], buf, sizeof buf);
+        if (n <= 0)
+            break;
+        for (ssize_t i = 0; i < n; i++) {
+            if (buf[i] != '\r' && buf[i] != '\n') {
+                if (len < sizeof line - 1)
+                    line[len++] = buf[i];
+                continue;
+            }
+            line[len] = 0;
+            len = 0;
+            char *pct = strchr(line, '%');
+            if (!pct)
+                continue;
+            char *num = pct;
+            while (num > line && isdigit((unsigned char)num[-1]))
+                num--;
+            int v = num < pct ? atoi(num) : -1;
+            if (v >= 0 && v <= 100 && v != shown) {
+                shown = v;
+                say("progress %d", lo + (hi - lo) * v / 100);
+                if (v % 10 == 0)
+                    logline("rsync: %s", line);
+            }
+        }
+    }
+    close(out[0]);
+    if (waitpid(pid, &st, 0) < 0)
+        return -1;
+    return WIFEXITED(st) && WEXITSTATUS(st) == 0 ? 0 : -1;
 }
 
 static int is_block(const char *path)
@@ -104,261 +256,328 @@ static int is_block(const char *path)
     return stat(path, &st) == 0 && S_ISBLK(st.st_mode);
 }
 
-static const char *blockers(const struct install_plan *p)
+/* Where `dev` is mounted, from the mount table; 0 if it is. */
+static int mounted_at(const char *dev, char *dir, size_t n)
 {
-    if (!is_block(p->disk))
-        return "There is no block device for that disk. The kernel does not "
-               "yet publish /dev/nvme0n1 or /dev/sda (docs/INSTALLER-PLAN.md: "
-               "block device nodes, and on the MSI often Intel VMD). "
-               "Nothing was written.";
-    return NULL;
+    FILE *f = fopen("/proc/self/mounts", "r");
+    char line[512], src[128], at[256];
+    int found = -1;
+
+    if (!f)
+        return -1;
+    while (found && fgets(line, sizeof line, f))
+        if (sscanf(line, "%127s %255s", src, at) == 2 && !strcmp(src, dev)) {
+            snprintf(dir, n, "%s", at);
+            found = 0;
+        }
+    fclose(f);
+    return found;
 }
 
-static int open_plan(const char *path, struct install_plan *p, int need_secret)
+/* The caller's own plan only: a regular file (not a link) that they or
+   root own, mode 0600 if it holds a password. It is read from the file we
+   checked, not opened again by name. */
+static int open_plan(const char *path, uid_t caller, struct install_plan *p, int need_secret)
 {
     struct stat st;
-    int fd;
-    FILE *f;
     char err[256];
+    FILE *f;
+    int fd;
 
-    if (strstr(path, "..")) {
-        fail("The plan path is not allowed.");
-        return -1;
-    }
     fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    if (fd < 0) {
-        fail("Can't open the plan (%s).", strerror(errno));
-        return -1;
-    }
+    if (fd < 0)
+        return fail("Can't open the plan (%s).", strerror(errno));
     if (fstat(fd, &st) || !S_ISREG(st.st_mode)) {
         close(fd);
-        fail("The plan is not a regular file.");
-        return -1;
+        return fail("The plan is not a regular file.");
+    }
+    if (st.st_uid != caller && st.st_uid != 0) {
+        close(fd);
+        return fail("The plan belongs to someone else.");
     }
     f = fdopen(fd, "r");
     if (!f) {
         close(fd);
-        fail("Can't read the plan.");
-        return -1;
+        return fail("Can't read the plan.");
     }
-    fclose(f);                  /* plan_read opens the path again; we checked the name */
-    if (plan_read(path, p)) {
-        fail("Can't parse the plan.");
-        return -1;
-    }
+    int bad = plan_read_file(f, p);
+    fclose(f);
+    if (bad)
+        return fail("Can't parse the plan.");
     if (need_secret && p->password[0] && (st.st_mode & 077) != 0) {
         explicit_bzero(p->password, sizeof p->password);
-        fail("A plan that holds a password must be mode 0600.");
-        return -1;
+        return fail("A plan that holds a password must be mode 0600.");
     }
     if (plan_check(p, err, sizeof err)) {
         explicit_bzero(p->password, sizeof p->password);
-        fail("%s", err);
-        return -1;
+        return fail("%s", err);
     }
     return 0;
 }
 
-static int confirm_disk(const struct install_plan *p)
+/* Root, or a member of wheel (the administrators, as doas has them). */
+static int may_install(uid_t caller)
+{
+    struct group *g = getgrnam("wheel");
+    gid_t groups[64];
+    int n;
+
+    if (caller == 0)
+        return 1;
+    if (!g)
+        return 0;
+    if (getgid() == g->gr_gid)
+        return 1;
+    n = getgroups(64, groups);
+    for (int i = 0; i < n; i++)
+        if (groups[i] == g->gr_gid)
+            return 1;
+    return 0;
+}
+
+/* Decide the layout from the disk as it is now, before anything is
+   written; refuse what can't work, with a sentence saying why. */
+static int check_layout(const struct install_plan *p)
+{
+    struct disk_info disks[DISKS_MAX];
+    int n = disks_scan(disks, DISKS_MAX);
+    const struct disk_info *d = disks_find(disks, n, p->disk);
+    unsigned long long esp = (unsigned long long)ESP_MIB * MIB, pool, root, min;
+
+    if (p->firmware != FW_UEFI)
+        return fail("Installing on a computer that starts with BIOS isn't finished yet. Nothing was written.");
+    if (!d || !is_block(p->disk))
+        return fail("The disk %s isn't there (any more). Nothing was written.", p->disk);
+    if (d->in_use)
+        return fail("%s", d->running ? "Refusing to install onto the disk MyOS is running from."
+                                     : "That disk is still in use from an earlier try. Restart the "
+                                       "computer, then install again. Nothing was written.");
+    memset(&L, 0, sizeof L);
+    L.erase = p->mode == MODE_ERASE;
+    if (!L.erase) {
+        const char *why = disks_free_problem(d, (unsigned long long)MIN_INSTALL_GB * GB);
+        if (why)
+            return fail("%s Nothing was written.", why);
+        for (int i = 0; i < d->npart; i++)
+            L.before[L.nbefore++] = d->parts[i].start;
+    }
+    /* Erase: all but the two GPT copies (34 sectors each end) and the 1 MiB
+       alignment in front. Free space: what is left, all of it usable only
+       if it is in one piece (sfdisk says so if it isn't). */
+    pool = L.erase ? d->bytes - 2 * MIB : d->free_bytes;
+    min = esp + (unsigned long long)MIN_INSTALL_GB * GB;
+    if (pool < min)
+        return fail("The disk is too small: MyOS needs %d GB. Nothing was written.",
+                    MIN_INSTALL_GB + ESP_MIB / 1000 + 1);
+    root = (unsigned long long)p->root_gb * GB;
+    if (root > pool - esp)
+        root = pool - esp;
+    L.root_mib = root / MIB;
+    /* myos-data gets the rest, if that is worth a partition (1 GB). */
+    L.data = p->separate_home && pool - esp - L.root_mib * MIB >= GB;
+    if (p->separate_home && !L.data)
+        logline("no room for myos-data: /home stays on myos-root");
+    logline("layout on %s (%s): %s; EFI %d MiB, myos-root %llu MiB%s", p->disk, d->name,
+            L.erase ? "new partition table" : "added in the free space", ESP_MIB, L.root_mib,
+            L.data ? ", myos-data the rest" : "");
+    return 0;
+}
+
+/* After sfdisk: our three, by GPT name, among the partitions that weren't
+   there before. */
+static int find_new_parts(const struct install_plan *p)
 {
     struct disk_info disks[DISKS_MAX];
     int n = disks_scan(disks, DISKS_MAX);
     const struct disk_info *d = disks_find(disks, n, p->disk);
 
-    if (d && d->in_use) {
-        fail("Refusing to install onto the disk MyOS is running from.");
-        return -1;
+    if (!d)
+        return fail("The disk went away after the partition table was written.");
+    for (int i = 0; i < d->npart; i++) {
+        const struct disk_part *q = &d->parts[i];
+        int old = 0;
+        for (int k = 0; k < L.nbefore; k++)
+            old |= L.before[k] == q->start;
+        if (old)
+            continue;
+        char *slot = !strcmp(q->label, ESP_NAME) ? L.esp
+                   : !strcmp(q->label, "myos-root") ? L.root
+                   : !strcmp(q->label, "myos-data") ? L.datadev : NULL;
+        if (slot && !slot[0])
+            snprintf(slot, sizeof L.esp, "/dev/%s", q->name);
     }
-    if (n && !d)
-        logline("warning: %s was not in /sys/block when the helper started", p->disk);
+    if (!L.esp[0] || !L.root[0] || (L.data && !L.datadev[0]))
+        return fail("The new partitions didn't appear on %s (the kernel didn't read the new table).",
+                    p->disk);
+    if (!is_block(L.esp) || !is_block(L.root) || (L.data && !is_block(L.datadev)))
+        return fail("The new partitions have no /dev files.");
+    logline("new: EFI %s, myos-root %s%s%s", L.esp, L.root, L.data ? ", myos-data " : "",
+            L.data ? L.datadev : "");
     return 0;
-}
-
-static void write_sfdisk(const struct install_plan *p, char *script, size_t n)
-{
-    if (p->firmware == FW_UEFI) {
-        if (p->mode == MODE_ERASE && !p->keep_esp)
-            snprintf(script, n,
-                     "label: gpt\n"
-                     "size=%dMiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name=EFI\n"
-                     "size=%dGiB, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name=myos-root\n"
-                     "%s",
-                     ESP_MIB, p->root_gb,
-                     p->separate_home ? "type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name=myos-data\n" : "");
-        else
-            snprintf(script, n,
-                     "# keep the existing table; add in free space:\n"
-                     "size=%dGiB, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name=myos-root\n"
-                     "%s",
-                     p->root_gb,
-                     p->separate_home ? "type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name=myos-data\n" : "");
-    } else {
-        snprintf(script, n,
-                 "label: dos\n"
-                 "size=%dMiB, type=7f, bootable\n"
-                 "size=%dGiB, type=83\n"
-                 "%s",
-                 BOOT_AREA_MIB, p->root_gb, p->separate_home ? "type=83\n" : "");
-    }
 }
 
 static int step_partition(const struct install_plan *p)
 {
-    char script[512], tmp[] = "/tmp/myos-sfdisk.XXXXXX";
-    int fd;
-    FILE *f;
+    char script[768];
+    int fd, rc;
 
-    say("step partition");
-    say("progress 8");
+    step("partition");
+    say("progress 3");
     say("file writing the partition table");
-    write_sfdisk(p, script, sizeof script);
+    snprintf(script, sizeof script,
+             "%s"
+             "size=%dMiB, type=" GPT_ESP ", name=\"" ESP_NAME "\"\n"
+             "size=%lluMiB, type=" GPT_LINUX ", name=myos-root\n"
+             "%s",
+             L.erase ? "label: gpt\n" : "",
+             ESP_MIB, L.root_mib,
+             L.data ? "type=" GPT_LINUX ", name=myos-data\n" : "");
     logline("sfdisk script for %s:\n%s", p->disk, script);
+    {
+        char *erase[] = { "sfdisk", "--no-reread", "--wipe", "always", (char *)p->disk, NULL };
+        char *append[] = { "sfdisk", "--no-reread", "--append", (char *)p->disk, NULL };
+        if (run_in(L.erase ? erase : append, script))
+            return fail("sfdisk could not write the partition table on %s.", p->disk);
+    }
     if (!apply)
         return 0;
+    /* The kernel reads the table again: the new partitions get their
+       /dev files. It must work; a guess at their names is how the old
+       helper formatted the wrong ones. */
+    fd = open(p->disk, O_RDONLY | O_CLOEXEC);
+    rc = fd < 0 ? -1 : ioctl(fd, BLKRRPART);
+    if (fd >= 0)
+        close(fd);
+    if (rc)
+        return fail("The kernel couldn't read the new partition table (%s). Restart the computer "
+                    "and install again.", strerror(errno));
+    return find_new_parts(p);
+}
 
-    fd = mkstemp(tmp);
-    if (fd < 0) {
-        fail("Can't write a temporary sfdisk script.");
-        return -1;
-    }
-    f = fdopen(fd, "w");
-    if (!f || fputs(script, f) < 0 || fclose(f)) {
-        unlink(tmp);
-        fail("Can't write a temporary sfdisk script.");
-        return -1;
-    }
-    /* Feed the script on stdin. */
-    {
-        pid_t pid = fork();
-        int st;
-        if (pid == 0) {
-            int in = open(tmp, O_RDONLY | O_CLOEXEC);
-            if (in >= 0) {
-                dup2(in, 0);
-                close(in);
-            }
-            execlp("sfdisk", "sfdisk", "--no-reread", p->disk, (char *)NULL);
-            _exit(127);
-        }
-        waitpid(pid, &st, 0);
-        unlink(tmp);
-        if (!(WIFEXITED(st) && WEXITSTATUS(st) == 0)) {
-            fail("sfdisk could not write the partition table on %s.", p->disk);
-            return -1;
-        }
-    }
-    /* Ask the kernel to read the new table. MyOS has no BLKRRPART yet. */
-    {
-        char *a[] = { "blockdev", "--rereadpt", (char *)p->disk, NULL };
-        if (runv(a))
-            logline("blockdev --rereadpt failed (expected until BLKRRPART exists)");
-    }
-    return 0;
+static int mke2fs(const char *dev, const char *label, const char *ratio)
+{
+    /* The features MyOS's ext2 reads and writes (fs/ext2.c), as the live
+       disk's own myos-root has; 4 KiB blocks. -i: one inode per `ratio`
+       bytes; fewer inodes than mke2fs's default make it much faster on a
+       big disk (each one is zeroed). */
+    char *a[] = { "mke2fs", "-q", "-F", "-t", "ext2", "-O", "none,filetype,sparse_super,large_file",
+                  "-b", "4096", "-i", (char *)ratio, "-L", (char *)label, (char *)dev, NULL };
+    return run(a);
 }
 
 static int step_filesystems(const struct install_plan *p)
 {
-    char rootdev[64], datadev[64], espdev[64];
-    int root_n = (p->firmware == FW_UEFI && p->mode == MODE_ERASE && !p->keep_esp) ? 2 : 1;
-    int data_n = root_n + 1;
-
-    if (p->firmware == FW_BIOS)
-        root_n = 2, data_n = 3;
-    if (p->firmware == FW_UEFI && !(p->mode == MODE_ERASE && !p->keep_esp))
-        root_n = p->keep_esp ? 0 : 2; /* 0 = find by label after sfdisk; we guess next slot */
-    if (!root_n)
-        root_n = 3;             /* common: EFI=1, Windows=2, myos-root=3 in free space */
-
-    disks_part_path(p->disk, root_n, rootdev, sizeof rootdev);
-    disks_part_path(p->disk, data_n, datadev, sizeof datadev);
-    disks_part_path(p->disk, 1, espdev, sizeof espdev);
-
-    say("step filesystems");
-    say("progress 16");
+    (void)p;
+    step("filesystems");
+    say("progress 6");
     say("file making ext2 on myos-root");
-    logline("mke2fs -F -L myos-root %s", rootdev);
-    if (apply) {
-        char *a[] = { "mke2fs", "-F", "-L", "myos-root", rootdev, NULL };
-        if (runv(a)) {
-            fail("mke2fs failed on %s.", rootdev);
-            return -1;
-        }
-    }
-    if (p->separate_home) {
+    if (mke2fs(apply ? L.root : "<myos-root>", "myos-root", "65536"))
+        return fail("mke2fs failed on %s.", L.root);
+    if (L.data) {
+        say("progress 10");
         say("file making ext2 on myos-data");
-        logline("mke2fs -F -L myos-data %s", datadev);
-        if (apply) {
-            char *a[] = { "mke2fs", "-F", "-L", "myos-data", datadev, NULL };
-            if (runv(a)) {
-                fail("mke2fs failed on %s.", datadev);
-                return -1;
-            }
-        }
+        if (mke2fs(apply ? L.datadev : "<myos-data>", "myos-data", "262144"))
+            return fail("mke2fs failed on %s.", L.datadev);
     }
-    if (p->firmware == FW_UEFI && p->mode == MODE_ERASE && !p->keep_esp) {
-        say("file making FAT32 on the EFI partition");
-        logline("mkfs.vfat -n EFI %s", espdev);
-        if (apply) {
-            char *a[] = { "mkfs.vfat", "-n", "EFI", espdev, NULL };
-            if (runv(a)) {
-                fail("mkfs.vfat failed (is dosfstools installed?).");
-                return -1;
-            }
-        }
+    return 0;
+}
+
+/* The stick's EFI partition, mounted read-only (MyOS's FAT only reads):
+   on the disk "/" is on, the partition the firmware started us from. */
+static int live_esp(char *dir, size_t n)
+{
+    struct disk_info disks[DISKS_MAX];
+    int nd = disks_scan(disks, DISKS_MAX);
+    char dev[64] = "";
+
+    for (int i = 0; i < nd && !dev[0]; i++) {
+        if (!disks[i].running)
+            continue;
+        for (int k = 0; k < disks[i].npart && !dev[0]; k++)
+            if (disks[i].parts[k].is_esp)
+                snprintf(dev, sizeof dev, "/dev/%s", disks[i].parts[k].name);
     }
+    if (!dev[0])
+        return fail("Can't find the EFI partition MyOS started from.");
+    if (mounted_at(dev, dir, n) == 0)
+        return 0;
+    snprintf(dir, n, "%s", LIVE_ESP);
+    if (mkdir(LIVE_ESP, 0700) && errno != EEXIST)
+        return fail("Can't make %s.", LIVE_ESP);
+    if (mount(dev, LIVE_ESP, "vfat", MS_RDONLY, NULL))
+        return fail("Can't read the stick's EFI partition %s (%s).", dev, strerror(errno));
+    return 0;
+}
+
+static int step_boot(const struct install_plan *p)
+{
+    char src[256], probe[300];
+    struct stat st;
+
+    (void)p;
+    step("boot");
+    say("progress 14");
+    say("file copying MyOS's start files to the EFI partition");
+    logline("FAT32 on the new EFI partition, with the stick's EFI/BOOT and EFI/MYOS "
+            "(the firmware starts EFI/BOOT/BOOTX64.EFI by itself; no boot entry is written)");
+    if (!apply) {
+        char *a[] = { "python3", "-I", MKESP, "<EFI partition>", "<the stick's>", NULL };
+        return run(a);
+    }
+    if (live_esp(src, sizeof src))
+        return -1;
+    snprintf(probe, sizeof probe, "%s/EFI/BOOT/BOOTX64.EFI", src);
+    if (stat(probe, &st))
+        return fail("The stick's EFI partition has no EFI/BOOT/BOOTX64.EFI.");
+    {
+        char *a[] = { "python3", "-I", MKESP, L.esp, src, NULL };
+        if (run(a))
+            return fail("Making the EFI partition failed (see %s).", PLAN_LOG_DEFAULT);
+    }
+    say("progress 20");
     return 0;
 }
 
 static int step_copy(const struct install_plan *p)
 {
-    char *argv[] = {
-        "rsync", "-aHAX",
-        "--exclude=/proc", "--exclude=/sys", "--exclude=/dev",
-        "--exclude=/tmp", "--exclude=/run", "--exclude=/mnt",
-        "--exclude=/home/myos", "--exclude=/lost+found",
-        "/", "/mnt/myos-root/", NULL
-    };
-
     (void)p;
-    say("step copy");
+    step("copy");
     say("progress 20");
-    say("file copying the live system");
-    logline("mount LABEL=myos-root /mnt/myos-root");
-    if (p->separate_home)
-        logline("mount LABEL=myos-data /mnt/myos-root/home");
-    logline("rsync -aHAX / /mnt/myos-root/ (live paths left out)");
-    if (!apply)
-        return 0;
-    if (mkdir("/mnt/myos-root", 0755) && errno != EEXIST) {
-        fail("Can't make /mnt/myos-root.");
-        return -1;
-    }
-    {
-        char *m[] = { "mount", "-L", "myos-root", "/mnt/myos-root", NULL };
-        if (runv(m)) {
-            fail("Can't mount the new root. Runtime ext2 mount is still a kernel gap (B27).");
-            return -1;
+    say("file copying the system (several minutes)");
+    if (apply) {
+        if (mkdir(NEWROOT, 0755) && errno != EEXIST)
+            return fail("Can't make %s.", NEWROOT);
+        if (mount(L.root, NEWROOT, "ext2", 0, NULL))
+            return fail("Can't mount the new myos-root %s (%s).", L.root, strerror(errno));
+        if (L.data) {
+            /* The kernel mounts myos-data at /data at every start;
+               /home is a link into it (made in configure). */
+            if (mkdir(NEWROOT "/data", 0755) && errno != EEXIST)
+                return fail("Can't make /data on the new system.");
+            if (mount(L.datadev, NEWROOT "/data", "ext2", 0, NULL))
+                return fail("Can't mount the new myos-data %s (%s).", L.datadev, strerror(errno));
         }
     }
-    if (p->separate_home) {
-        mkdir("/mnt/myos-root/home", 0755);
-        char *m[] = { "mount", "-L", "myos-data", "/mnt/myos-root/home", NULL };
-        if (runv(m)) {
-            fail("Can't mount myos-data.");
-            return -1;
-        }
-    }
-    if (runv(argv)) {
-        fail("Copying the system failed (rsync). Hard links may still be missing (B12).");
-        return -1;
-    }
-    say("progress 78");
+    /* Everything of the running system but what belongs to this one start
+       of it: the kernel's own file systems, temporary files, mounts (the
+       new disk itself is under /mnt), and the live user's home. -x stays on
+       "/"'s own file system where the kernel tells them apart. */
+    char *argv[] = {
+        "rsync", "-ax", "--inplace", "--numeric-ids", "--no-inc-recursive", "--info=progress2",
+        "--exclude=/proc/*", "--exclude=/sys/*", "--exclude=/dev/*", "--exclude=/run/*",
+        "--exclude=/tmp/*", "--exclude=/var/tmp/*", "--exclude=/mnt/*", "--exclude=/media/*",
+        "--exclude=/home/*", "--exclude=/data/*", "--exclude=/lost+found",
+        "/", NEWROOT "/", NULL
+    };
+    if (run_rsync(argv, 20, 88))
+        return fail("Copying the system failed (rsync; see %s).", PLAN_LOG_DEFAULT);
+    say("progress 88");
     return 0;
 }
 
 static int write_text(const char *path, const char *text, mode_t mode)
 {
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, mode);
     size_t n, done = 0;
 
     if (fd < 0)
@@ -370,49 +589,268 @@ static int write_text(const char *path, const char *text, mode_t mode)
             break;
         done += (size_t)w;
     }
-    if (done != n || fchmod(fd, mode) || fsync(fd)) {
+    if (done != n || fchmod(fd, mode)) {
         close(fd);
         return -1;
     }
     return close(fd);
 }
 
+/* A whole file, NUL-ended; NULL if it can't be read. */
+static char *slurp(const char *path, struct stat *st)
+{
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    char *buf;
+    size_t done = 0;
+
+    if (fd < 0 || fstat(fd, st) || st->st_size > 1 << 20 || !(buf = malloc((size_t)st->st_size + 1))) {
+        if (fd >= 0)
+            close(fd);
+        return NULL;
+    }
+    while (done < (size_t)st->st_size) {
+        ssize_t r = read(fd, buf + done, (size_t)st->st_size - done);
+        if (r <= 0)
+            break;
+        done += (size_t)r;
+    }
+    close(fd);
+    buf[done] = 0;
+    return buf;
+}
+
+/* Replace path with text, keeping the old file's owner and mode: written
+   whole to path+, then renamed over it (a reader sees old or new). */
+static int replace(const char *path, const char *text, const struct stat *old)
+{
+    char tmp[300];
+    snprintf(tmp, sizeof tmp, "%s+", path);
+    unlink(tmp);
+    if (write_text(tmp, text, old->st_mode & 07777) || chown(tmp, old->st_uid, old->st_gid) ||
+        rename(tmp, path)) {
+        unlink(tmp);
+        return -1;
+    }
+    return 0;
+}
+
+/* A field of a passwd/group line (0-based); "" if it has fewer. */
+static void field(const char *line, int k, char *out, size_t n)
+{
+    while (k-- > 0 && (line = strchr(line, ':')))
+        line++;
+    if (!line) {
+        out[0] = 0;
+        return;
+    }
+    size_t len = strcspn(line, ":\n");
+    if (len >= n)
+        len = n - 1;
+    memcpy(out, line, len);
+    out[len] = 0;
+}
+
+/* People's accounts are uid 1000-59999 (Alpine's UID_MIN..); the rest
+   belong to the system. The installed system keeps only the system's and
+   the new one: not the live user "myos" (no password!), nor anyone added
+   while trying MyOS out (their homes weren't copied). */
+static int is_person(const char *passwd_line)
+{
+    char uid[16];
+    field(passwd_line, 2, uid, sizeof uid);
+    long u = strtol(uid, NULL, 10);
+    return uid[0] && u >= 1000 && u < 60000;
+}
+
+#define MAX_GONE 32
+
+static int gone(char names[][PLAN_USER], int n, const char *name)
+{
+    for (int i = 0; i < n; i++)
+        if (!strcmp(names[i], name))
+            return 1;
+    return 0;
+}
+
+static int write_accounts(const struct install_plan *p, unsigned *uid_out)
+{
+    struct stat pst, gst, sst;
+    char *passwd = slurp(NEWROOT "/etc/passwd", &pst), *group = slurp(NEWROOT "/etc/group", &gst),
+         *shadow = slurp(NEWROOT "/etc/shadow", &sst);
+    char names[MAX_GONE][PLAN_USER], name[PLAN_USER], salt[32], *hash;
+    int ngone = 0, rc = -1;
+    unsigned uid = 1000;
+    static const char *const groups[] = { "wheel", "audio", "video", "input", "netdev", NULL };
+    size_t cap;
+    char *np = NULL, *ng = NULL, *ns = NULL;
+
+    if (!passwd || !group || !shadow)
+        goto out;
+    cap = strlen(passwd) + strlen(group) + strlen(shadow) + 1024;
+    np = calloc(1, cap), ng = calloc(1, cap), ns = calloc(1, cap);
+    if (!np || !ng || !ns)
+        goto out;
+
+    /* passwd: the system's lines, then the new account. */
+    for (char *l = passwd; *l; ) {
+        char *e = strchr(l, '\n');
+        size_t len = e ? (size_t)(e - l) + 1 : strlen(l);
+        field(l, 0, name, sizeof name);
+        if (is_person(l) || !strcmp(name, p->user)) {
+            if (ngone < MAX_GONE)
+                snprintf(names[ngone++], PLAN_USER, "%s", name);
+        } else
+            strncat(np, l, len);
+        l += len;
+    }
+    if (!gone(names, ngone, p->user) && ngone < MAX_GONE)
+        snprintf(names[ngone++], PLAN_USER, "%s", p->user);
+    snprintf(np + strlen(np), cap - strlen(np), "%s:x:%u:%u:%s:/home/%s:/bin/bash\n",
+             p->user, uid, uid, p->fullname, p->user);
+
+    /* group: the people's own groups go, their names leave the member
+       lists, and the new account joins the administrator's groups. */
+    for (char *l = group; *l; ) {
+        char *e = strchr(l, '\n');
+        size_t len = e ? (size_t)(e - l) + 1 : strlen(l);
+        char g[64], gid[16], members[512] = "", out[640];
+        field(l, 0, g, sizeof g);
+        field(l, 2, gid, sizeof gid);
+        long id = strtol(gid, NULL, 10);
+        if (gone(names, ngone, g) || (id >= 1000 && id < 60000)) {
+            l += len;
+            continue;
+        }
+        /* members, minus the removed ones */
+        {
+            char all[512], *save = NULL;
+            field(l, 3, all, sizeof all);
+            for (char *m = strtok_r(all, ",", &save); m; m = strtok_r(NULL, ",", &save))
+                if (!gone(names, ngone, m))
+                    snprintf(members + strlen(members), sizeof members - strlen(members), "%s%s",
+                             members[0] ? "," : "", m);
+        }
+        for (int k = 0; groups[k]; k++)
+            if (!strcmp(g, groups[k]))
+                snprintf(members + strlen(members), sizeof members - strlen(members), "%s%s",
+                         members[0] ? "," : "", p->user);
+        char pw[64];
+        field(l, 1, pw, sizeof pw);
+        snprintf(out, sizeof out, "%s:%s:%s:%s\n", g, pw, gid, members);
+        strncat(ng, out, cap - strlen(ng) - 1);
+        l += len;
+    }
+    snprintf(ng + strlen(ng), cap - strlen(ng), "%s:x:%u:\n", p->user, uid);
+
+    /* shadow: root stays locked ("*": no password opens it; doas is the
+       way in), the people's lines go, the new one has sha512-crypt. */
+    {
+        static const char chars[] = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        unsigned char rnd[16];
+        if (getrandom(rnd, sizeof rnd, 0) != sizeof rnd)
+            goto out;
+        strcpy(salt, "$6$");
+        for (int i = 0; i < 16; i++)
+            salt[3 + i] = chars[rnd[i] % 64];
+        salt[19] = 0;
+        hash = crypt(p->password, salt);
+        if (!hash || hash[0] != '$')
+            goto out;
+    }
+    for (char *l = shadow; *l; ) {
+        char *e = strchr(l, '\n');
+        size_t len = e ? (size_t)(e - l) + 1 : strlen(l);
+        field(l, 0, name, sizeof name);
+        if (!strcmp(name, "root")) {
+            const char *rest = strchr(l, ':');
+            rest = rest ? strchr(rest + 1, ':') : NULL;
+            if (rest) {
+                strcat(ns, "root:*");
+                strncat(ns, rest, (size_t)(l + len - rest));
+            }
+        } else if (!gone(names, ngone, name))
+            strncat(ns, l, len);
+        l += len;
+    }
+    snprintf(ns + strlen(ns), cap - strlen(ns), "%s:%s:%ld:0:99999:7:::\n", p->user, hash,
+             (long)(time(NULL) / 86400));
+
+    /* passwd last: the account appears once its group and password exist. */
+    if (replace(NEWROOT "/etc/shadow", ns, &sst) || replace(NEWROOT "/etc/group", ng, &gst) ||
+        replace(NEWROOT "/etc/passwd", np, &pst))
+        goto out;
+    for (int i = 0; i < ngone; i++)
+        if (strcmp(names[i], p->user))
+            logline("account %s (from the live system) left out", names[i]);
+    *uid_out = uid;
+    rc = 0;
+out:
+    if (ns)
+        explicit_bzero(ns, cap);
+    if (shadow)
+        explicit_bzero(shadow, strlen(shadow));
+    free(passwd), free(group), free(shadow), free(np), free(ng), free(ns);
+    return rc;
+}
+
 static int step_configure(const struct install_plan *p)
 {
-    const char *root = apply ? "/mnt/myos-root" : "";
-    char path[256], body[512];
+    char path[300], body[512], home[300];
+    unsigned uid = 1000;
 
-    say("step configure");
-    say("progress 82");
-    say("file setting up the account and language");
-    logline("hostname %s, LANG=%s, timezone %s, compositor %s",
-            p->hostname, p->lang, p->timezone, p->compositor);
-    logline("account %s (%s), root locked, doas persist for wheel", p->user, p->fullname);
-    if (p->copy_wifi && p->wifi_ssid[0])
-        logline("copy Wi-Fi network %s", p->wifi_ssid);
+    step("configure");
+    say("progress 89");
+    say("file setting up your account and language");
+    logline("account %s (%s), administrator; root locked; computer %s", p->user, p->fullname, p->hostname);
+    logline("LANG=%s, keyboard %s, time zone %s, desktop effects %s", p->lang, p->keyboard,
+            p->timezone, p->compositor);
+    logline("removed from the new system: the live user, the stick's ssh host key and "
+            "authorized keys, the installer; ssh login off");
     if (!apply)
         return 0;
 
-    snprintf(path, sizeof path, "%s/etc/hostname", root);
+    if (write_accounts(p, &uid))
+        return fail("Can't write the account into /etc/passwd, group and shadow.");
+
+    /* The home: /home/<user>, on myos-data when there is one. */
+    if (L.data) {
+        rmdir(NEWROOT "/home");         /* rsync made it, empty */
+        if (mkdir(NEWROOT "/data/home", 0755) && errno != EEXIST)
+            return fail("Can't make /data/home.");
+        struct stat st;
+        if ((symlink("/data/home", NEWROOT "/home") && errno != EEXIST) ||
+            lstat(NEWROOT "/home", &st) || !S_ISLNK(st.st_mode))
+            return fail("Can't link /home to /data/home.");
+        snprintf(home, sizeof home, NEWROOT "/data/home/%s", p->user);
+    } else
+        snprintf(home, sizeof home, NEWROOT "/home/%s", p->user);
+    if (mkdir(home, 0700) && errno != EEXIST)
+        return fail("Can't make the home folder.");
+    {
+        char from[] = NEWROOT "/etc/skel/.", ids[32];
+        char *cp[] = { "cp", "-a", from, home, NULL };
+        snprintf(ids, sizeof ids, "%u:%u", uid, uid);
+        char *ch[] = { "chown", "-R", ids, home, NULL };
+        if (run(cp))
+            logline("warning: /etc/skel not copied");
+        if (run(ch) || chmod(home, 0700))
+            return fail("Can't give the home folder to %s.", p->user);
+    }
+
+    snprintf(path, sizeof path, NEWROOT "/etc/hostname");
     snprintf(body, sizeof body, "%s\n", p->hostname);
     if (write_text(path, body, 0644))
-        return fail("Can't write /etc/hostname."), -1;
+        return fail("Can't write /etc/hostname.");
 
-    snprintf(path, sizeof path, "%s/etc/myos", root);
-    mkdir(path, 0755);
-    snprintf(path, sizeof path, "%s/etc/myos/desktop.conf", root);
+    mkdir(NEWROOT "/etc/myos", 0755);
     snprintf(body, sizeof body, "compositor=%s\n", p->compositor);
-    write_text(path, body, 0644);
+    write_text(NEWROOT "/etc/myos/desktop.conf", body, 0644);
 
-    snprintf(path, sizeof path, "%s/etc/profile.d", root);
-    mkdir(path, 0755);
-    snprintf(path, sizeof path, "%s/etc/profile.d/lang.sh", root);
+    mkdir(NEWROOT "/etc/profile.d", 0755);
     snprintf(body, sizeof body, "export LANG=%s\nexport LC_ALL=%s\n", p->lang, p->lang);
-    write_text(path, body, 0644);
+    write_text(NEWROOT "/etc/profile.d/lang.sh", body, 0644);
 
-    snprintf(path, sizeof path, "%s/etc/X11/xorg.conf.d", root);
-    mkdir(path, 0755);
-    snprintf(path, sizeof path, "%s/etc/X11/xorg.conf.d/00-keyboard.conf", root);
+    mkdir(NEWROOT "/etc/X11/xorg.conf.d", 0755);
     snprintf(body, sizeof body,
              "Section \"InputClass\"\n"
              "    Identifier \"MyOS keyboard\"\n"
@@ -420,118 +858,79 @@ static int step_configure(const struct install_plan *p)
              "    Option \"XkbLayout\" \"%s\"\n"
              "EndSection\n",
              p->keyboard);
-    write_text(path, body, 0644);
+    write_text(NEWROOT "/etc/X11/xorg.conf.d/00-keyboard.conf", body, 0644);
 
-    snprintf(path, sizeof path, "%s/etc/doas.d/wheel.conf", root);
-    write_text(path, "permit persist :wheel\n", 0644);
+    mkdir(NEWROOT "/etc/doas.d", 0755);
+    write_text(NEWROOT "/etc/doas.d/wheel.conf", "permit persist :wheel\n", 0644);
 
-    {
-        char zone[256], dest[256];
-        snprintf(zone, sizeof zone, "/usr/share/zoneinfo/%s", p->timezone);
-        snprintf(dest, sizeof dest, "%s/etc/localtime", root);
+    snprintf(path, sizeof path, NEWROOT "/usr/share/zoneinfo/%s", p->timezone);
+    if (access(path, R_OK) == 0) {
+        char dest[] = NEWROOT "/etc/localtime";
+        char *cp[] = { "cp", path, dest, NULL };
         unlink(dest);
-        if (access(zone, R_OK) == 0) {
-            char *a[] = { "cp", "-a", zone, dest, NULL };
-            runv(a);
-        }
+        run(cp);
     }
-    /* The account itself: same files myos-adduser writes, on the new root.
-       Until hard links and a writable mounted root exist, this is a log line. */
-    logline("would add %s to passwd/group/shadow on the new root (myos-adduser's method)", p->user);
-    return 0;
-}
 
-static int step_boot(const struct install_plan *p)
-{
-    say("step boot");
-    say("progress 92");
-    say("file making the disk start MyOS");
-    if (p->firmware == FW_UEFI) {
-        logline("copy BOOTX64.EFI, KERNEL.BIN, FONT.BIN to EFI/MYOS/");
-        logline("efibootmgr -c -L MyOS (needs UEFI SetVariable; else EFI/BOOT fallback)");
-    } else {
-        logline("write the MBR and the BIOS boot area (what make hd writes on the Mac)");
+    /* The live system's own things, which an installed one must not have:
+       the stick's ssh host key (every install would share it, and anyone
+       with a stick could pose as this computer), the build Mac's key for
+       the live user, and ssh login itself (off, as on a new Mac: turn on
+       with `doas ln -s /etc/sv/sshd /var/service/`). The installer goes:
+       it is setuid root and has nothing left to do. */
+    {
+        char *rm[] = { "rm", "-rf",
+                       NEWROOT "/etc/ssh/ssh_host_ed25519_key", NEWROOT "/etc/ssh/ssh_host_ed25519_key.pub",
+                       NEWROOT "/etc/ssh/ssh_host_rsa_key", NEWROOT "/etc/ssh/ssh_host_rsa_key.pub",
+                       NEWROOT "/etc/ssh/ssh_host_ecdsa_key", NEWROOT "/etc/ssh/ssh_host_ecdsa_key.pub",
+                       NEWROOT "/etc/ssh/authorized_keys",
+                       NEWROOT "/etc/runit/runsvdir/default/sshd",
+                       NEWROOT "/usr/share/applications/myos-install.desktop",
+                       NEWROOT "/usr/bin/myos-install",
+                       NEWROOT "/usr/libexec/myos-install-helper",
+                       NEWROOT MKESP,
+                       NEWROOT "/root/.ash_history", NEWROOT "/root/.bash_history",
+                       NULL };
+        run(rm);
     }
-    if (!apply)
-        return 0;
-    if (p->firmware == FW_UEFI) {
-        mkdir("/mnt/myos-efi", 0755);
-        char *m[] = { "mount", "-t", "vfat", "-L", "EFI", "/mnt/myos-efi", NULL };
-        if (runv(m)) {
-            fail("Can't mount the EFI partition (FAT32 mount/write are still kernel gaps).");
-            return -1;
-        }
-        mkdir("/mnt/myos-efi/EFI", 0755);
-        mkdir("/mnt/myos-efi/EFI/MYOS", 0755);
-        /* Sources: the running stick's ESP, if it is mounted, or /boot. */
-        {
-            static const char *const src[] = {
-                "/boot/efi/EFI/MYOS", "/efi/EFI/MYOS", "/boot/EFI/MYOS", NULL
-            };
-            int i;
-            for (i = 0; src[i]; i++)
-                if (access(src[i], R_OK) == 0)
-                    break;
-            if (!src[i]) {
-                fail("Can't find EFI/MYOS on the live system to copy.");
-                return -1;
-            }
-            char from[256], to[256];
-            static const char *const files[] = { "BOOTX64.EFI", "KERNEL.BIN", "FONT.BIN", "INITRD.CPIO", NULL };
-            for (int f = 0; files[f]; f++) {
-                snprintf(from, sizeof from, "%s/%s", src[i], files[f]);
-                snprintf(to, sizeof to, "/mnt/myos-efi/EFI/MYOS/%s", files[f]);
-                if (access(from, R_OK) == 0) {
-                    char *a[] = { "cp", "-a", from, to, NULL };
-                    runv(a);
-                }
-            }
-        }
-    }
+    /* Wi-Fi: the networks this stick knows (their passwords) only if asked;
+       root-only either way. */
+    if (!(p->copy_wifi && p->wifi_ssid[0]))
+        write_text(NEWROOT "/etc/wpa_supplicant/wpa_supplicant.conf",
+                   "# wpa_supplicant's settings: how it is controlled, and the Wi-Fi networks\n"
+                   "# this computer joins (added by the Wi-Fi icon in the taskbar).\n"
+                   "ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\n"
+                   "update_config=1\n",
+                   0600);
+    else
+        chmod(NEWROOT "/etc/wpa_supplicant/wpa_supplicant.conf", 0600);
+    say("progress 95");
     return 0;
 }
 
 static int step_finish(const struct install_plan *p)
 {
+    step("finish");
+    say("progress 96");
+    say("file writing everything to the disk");
+    /* MyOS's sync also flushes each written drive's own cache (bsync). */
+    logline("sync (the new disk stays mounted until restart)");
     (void)p;
-    say("step finish");
-    say("progress 98");
-    say("file syncing disks");
-    logline("sync; umount");
-    if (apply) {
-        char *a[] = { "sync", NULL };
-        runv(a);
-        char *u1[] = { "umount", "/mnt/myos-efi", NULL };
-        char *u2[] = { "umount", "/mnt/myos-root/home", NULL };
-        char *u3[] = { "umount", "/mnt/myos-root", NULL };
-        runv(u1);
-        runv(u2);
-        runv(u3);
-    }
+    if (apply)
+        sync();
     say("progress 100");
     return 0;
 }
 
 static int run_plan(const struct install_plan *p)
 {
-    const char *why;
-
-    if (confirm_disk(p))
+    if (check_layout(p))
         return 2;
-    why = blockers(p);
-    if (why) {
-        /* Dry-run still prints the steps so the window and --text can show them. */
-        if (apply) {
-            fail("%s", why);
-            return 2;
-        }
-        logline("%s", why);
-    }
-    if (step_partition(p) || step_filesystems(p) || step_copy(p) ||
-        step_configure(p) || step_boot(p) || step_finish(p))
+    if (step_partition(p) || step_filesystems(p) || step_boot(p) || step_copy(p) ||
+        step_configure(p) || step_finish(p))
         return 3;
+    step("done");
     say("ok");
-    logline("ok");
+    logline("ok: MyOS is installed on %s", p->disk);
     return 0;
 }
 
@@ -544,6 +943,7 @@ int main(int argc, char **argv)
 {
     const char *mode, *path;
     struct install_plan p;
+    uid_t caller = getuid();
     int rc;
 
     if (argc != 3) {
@@ -556,38 +956,36 @@ int main(int argc, char **argv)
         usage();
         return 1;
     }
-
     apply = !strcmp(mode, "--apply");
-    if (apply || !strcmp(mode, "--dry-run")) {
-        if (setuid(0) || setgid(0)) {
-            fail("This helper must be installed setuid root.");
-            return 1;
-        }
+
+    /* We are setuid root. Nothing of the caller's reaches the programs we
+       run: an LD_PRELOAD or PYTHONPATH would otherwise run their code as
+       root (the kernel marks only *this* program "secure", not sfdisk). */
+    if (clearenv() == 0) {
         setenv("PATH", "/usr/sbin:/usr/bin:/sbin:/bin", 1);
-        umask(022);
+        setenv("LC_ALL", "C", 1);
     }
+    umask(022);
+    if (!may_install(caller)) {
+        fail("Only an administrator may install MyOS.");
+        return 1;
+    }
+    if (setgid(0) || setuid(0)) {
+        fail("This helper must be installed setuid root.");
+        return 1;
+    }
+    open_log();
 
-    logf = fopen(PLAN_LOG_DEFAULT, "w");
-    if (logf)
-        fchmod(fileno(logf), 0644);
-
-    if (open_plan(path, &p, apply || !strcmp(mode, "--dry-run"))) {
-        if (logf)
-            fclose(logf);
+    if (open_plan(path, caller, &p, 1))
         return 2;
-    }
-
     if (!strcmp(mode, "--check")) {
         say("ok");
         explicit_bzero(p.password, sizeof p.password);
-        if (logf)
-            fclose(logf);
         return 0;
     }
-
     rc = run_plan(&p);
     explicit_bzero(p.password, sizeof p.password);
-    if (logf)
-        fclose(logf);
+    if (logfd >= 0)
+        close(logfd);
     return rc;
 }

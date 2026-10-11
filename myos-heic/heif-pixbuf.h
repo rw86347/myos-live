@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * heif-pixbuf.h — decode HEIC/HEIF/AVIF through libheif into GdkPixbufs.
  * Shared by Preview and My Files so we do not depend on gdk-pixbuf's loader.

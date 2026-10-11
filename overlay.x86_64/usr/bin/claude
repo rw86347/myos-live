@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # Claude Code, the native musl build. Its bundled ripgrep is a glibc
 # program, so search uses Alpine's rg instead.
 export USE_BUILTIN_RIPGREP=0

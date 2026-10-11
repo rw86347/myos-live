@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # mklivehd.sh — the live disk: the boot area of myos.img plus an ext2
 # partition labelled myos-root holding the live userland (rootfs.tar).
 #

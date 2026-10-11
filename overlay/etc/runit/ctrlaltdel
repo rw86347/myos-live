@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # Ctrl-Alt-Del: runit runs this, then stage 3 (stopit is now executable),
 # then reboots (so is reboot).
 chmod 100 /run/runit/stopit /run/runit/reboot

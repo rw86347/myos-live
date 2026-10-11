@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 """make-live-theme.py — the Golden Hour theme as files the live disk uses.
 
 assets/themes/golden-hour/make-theme.py is the design: one palette, and a

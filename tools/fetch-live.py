@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 """fetch-live.py — gather the software for the MyOS live disk.
 
     tools/fetch-live.py            build from live/packages.lock (exact files)
@@ -61,6 +63,7 @@ import hashlib
 import io
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -626,6 +629,15 @@ CLAUDE_TGZ_URL = ("https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x6
                   "-/claude-code-linux-x64-musl-2.1.295.tgz")
 CLAUDE_TGZ_SHA = "b1a2eded91011e370fc17b0c9c4aa30e0f3f8289690a340b04383a8f17c49334"
 
+# VS Code stable linux-x64 (glibc). Pinned URL and SHA; bump when updating.
+# There is no vscode apk on Alpine 3.20. Needs gcompat on the live disk.
+VSCODE_VERSION = "1.141.0"
+VSCODE_COMMIT = "2a59476c9bfcb90b3ddc372c36762471b7dfad1c"
+VSCODE_TGZ = "code-stable-x64-1791276637.tar.gz"
+VSCODE_TGZ_URL = ("https://vscode.download.prss.microsoft.com/dbazure/download/stable/"
+                  + VSCODE_COMMIT + "/" + VSCODE_TGZ)
+VSCODE_TGZ_SHA = "d77d588f0454cbaaa71e723497de4160d15b95fba4988abe177b1432e6bd570a"
+
 
 def add_claude(root):
     """The native Claude Code binary, on the 64-bit disk only."""
@@ -644,6 +656,35 @@ def add_claude(root):
         blob = t.extractfile("package/claude").read()
     root.add_bytes("usr/lib/claude/claude", blob, "overlay", 0o755)
     print(f"fetch-live: Claude Code {len(blob)} bytes")
+
+
+def add_vscode(root):
+    """Microsoft VS Code (linux-x64 tarball) under /usr/lib/vscode, 64-bit only."""
+    if ARCH != "x86_64":
+        return
+    cache = os.path.join(CACHE, "vscode")
+    os.makedirs(cache, exist_ok=True)
+    tgz = os.path.join(cache, VSCODE_TGZ)
+    if not os.path.exists(tgz) or sha256(tgz) != VSCODE_TGZ_SHA:
+        print(f"fetch-live: VS Code {VSCODE_VERSION}")
+        fetch(VSCODE_TGZ_URL, tgz)
+    got = sha256(tgz)
+    if got != VSCODE_TGZ_SHA:
+        die(f"VS Code checksum mismatch: {got}")
+    staging = os.path.join(cache, "overlay")
+    tree = os.path.join(cache, "VSCode-linux-x64")
+    dest = os.path.join(staging, "usr/lib/vscode")
+    shutil.rmtree(staging, ignore_errors=True)
+    shutil.rmtree(tree, ignore_errors=True)
+    with tarfile.open(tgz, "r:gz") as t:
+        t.extractall(cache, filter="data")
+    if not os.path.isdir(tree):
+        die("VS Code tarball has no VSCode-linux-x64/")
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    shutil.move(tree, dest)
+    n = add_overlay(root, staging, "overlay", f"VS Code {VSCODE_VERSION}")
+    shutil.rmtree(staging, ignore_errors=True)
+    print(f"fetch-live: VS Code {VSCODE_VERSION} ({n} paths)")
 
 
 def add_live_user(root):
@@ -835,6 +876,7 @@ def main():
         nover += add_overlay(root, EXTRA, "overlay", "MyOS build", extra_skip)
     if not login_only:
         add_claude(root)
+        add_vscode(root)
     add_live_user(root)
     root.close()
 

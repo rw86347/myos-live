@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * The installer's plan: every answer, written as `key=value` lines.
  *
@@ -13,6 +15,7 @@
 #define MYOS_INSTALL_PLAN_H
 
 #include <stddef.h>
+#include <stdio.h>
 
 #define PLAN_VERSION 1
 #define PLAN_PATH_DEFAULT "/tmp/myos-install.plan"
@@ -26,7 +29,7 @@
 
 #define MIN_INSTALL_GB 8
 #define DEFAULT_ROOT_GB 32
-#define ESP_MIB 260
+#define ESP_MIB 512                 /* the stick's start files (INITRD.CPIO ~240 MB) and room */
 #define BOOT_AREA_MIB 1
 
 enum install_mode {
@@ -74,6 +77,7 @@ struct install_plan {
 void plan_init(struct install_plan *p);
 int plan_write(const char *path, const struct install_plan *p);
 int plan_read(const char *path, struct install_plan *p);
+int plan_read_file(FILE *f, struct install_plan *p);
 /* 0 if the plan is complete enough to run; otherwise a sentence in err. */
 int plan_check(const struct install_plan *p, char *err, size_t errlen);
 void plan_describe(const struct install_plan *p, char *out, size_t n);

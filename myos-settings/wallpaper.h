@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * wallpaper.h — the desktop picture, shared by Settings and myos-desktop.
  *

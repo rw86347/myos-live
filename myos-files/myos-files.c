@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * myos-files — My Files, the file explorer, exactly as the Golden Hour
  * mockup draws it (assets/themes/golden-hour/mockup.png): menu bar, a

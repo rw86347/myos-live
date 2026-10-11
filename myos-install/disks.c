@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 #include "disks.h"
 
 #include <ctype.h>
@@ -42,6 +44,26 @@ void disks_format_bytes(unsigned long long n, char *out, size_t len)
         snprintf(out, len, "%llu GB", (n + 500000000ULL) / 1000000000ULL);
     else
         snprintf(out, len, "%llu MB", (n + 500000ULL) / 1000000ULL);
+}
+
+int disks_has_esp(const struct disk_info *d)
+{
+    for (int i = 0; i < d->npart; i++)
+        if (d->parts[i].is_esp)
+            return 1;
+    return 0;
+}
+
+/* Why MyOS can't go into this disk's free space, or NULL if it can. */
+const char *disks_free_problem(const struct disk_info *d, unsigned long long need)
+{
+    if (disks_has_esp(d))
+        return "MyOS can't add itself to the EFI partition this disk already has "
+               "(writing to FAT isn't finished yet). Choose \u201cErase disk\u201d to use "
+               "the whole disk, or pick another one.";
+    if (d->free_bytes < need)
+        return "There is not enough free space. Shrink the other system first, or erase the disk.";
+    return NULL;
 }
 
 void disks_part_path(const char *disk, int partno, char *out, size_t n)
@@ -171,7 +193,7 @@ static int on_disk(const char *dev, const char *sysname)
    itself, and the kernel refuses to open a mounted disk for writing
    anyway. 0 if /proc/mounts can't be read (then nothing is known). */
 #define MOUNTED_MAX 16
-static int mounted_devs(char devs[][64], int max)
+static int mounted_devs(char devs[][64], int *is_root, int max)
 {
     FILE *f = fopen("/proc/mounts", "r");
     char line[256];
@@ -180,9 +202,11 @@ static int mounted_devs(char devs[][64], int max)
     if (!f)
         return -1;
     while (n < max && fgets(line, sizeof line, f)) {
-        char dev[64];
-        if (sscanf(line, "%63s", dev) == 1 && !strncmp(dev, "/dev/", 5))
+        char dev[64], dir[128];
+        if (sscanf(line, "%63s %127s", dev, dir) == 2 && !strncmp(dev, "/dev/", 5)) {
+            is_root[n] = !strcmp(dir, "/");
             snprintf(devs[n++], 64, "%s", dev);
+        }
     }
     fclose(f);
     return n;
@@ -248,6 +272,14 @@ static int collect_parts(struct disk_info *d)
         used += p->bytes;
     }
     closedir(dp);
+    /* In disk order: a directory lists them in any order (the MSI's came
+       p2 before p1), and the bars draw them left to right. */
+    for (int i = 1; i < d->npart; i++)
+        for (int j = i; j > 0 && d->parts[j].start < d->parts[j - 1].start; j--) {
+            struct disk_part t = d->parts[j];
+            d->parts[j] = d->parts[j - 1];
+            d->parts[j - 1] = t;
+        }
     if (d->bytes > used)
         d->free_bytes = d->bytes - used;
     return d->npart;
@@ -258,11 +290,12 @@ int disks_scan(struct disk_info *out, int max)
     DIR *dp = opendir("/sys/block");
     struct dirent *e;
     char mounted[MOUNTED_MAX][64];
+    int mounted_root[MOUNTED_MAX];
     int n = 0, nmounted;
 
     if (!dp)
         return 0;
-    nmounted = mounted_devs(mounted, MOUNTED_MAX);
+    nmounted = mounted_devs(mounted, mounted_root, MOUNTED_MAX);
     while ((e = readdir(dp)) && n < max) {
         char file[192];
         unsigned long long sectors = 0, rem = 0;
@@ -295,22 +328,33 @@ int disks_scan(struct disk_info *out, int max)
         collect_parts(d);
         if (nmounted < 0)
             d->in_use = d->removable;   /* no mount table: the old guess, a USB stick */
-        for (int k = 0; k < nmounted && !d->in_use; k++)
-            d->in_use = on_disk(mounted[k], d->sysname);
-        for (int i = 0; i < d->npart; i++)
-            if (d->parts[i].is_esp)
-                d->has_windows = 1; /* an ESP plus a large partition: likely Windows */
-        if (d->has_windows) {
-            int large = 0;
-            for (int i = 0; i < d->npart; i++)
-                if (d->parts[i].bytes > 8ULL * 1000 * 1000 * 1000)
-                    large = 1;
-            d->has_windows = large;
+        for (int k = 0; k < nmounted; k++)
+            if (on_disk(mounted[k], d->sysname)) {
+                d->in_use = 1;
+                d->running |= mounted_root[k];
+            }
+        /* An EFI partition plus a large one: an operating system is
+           installed (its EFI partition is kept). Windows only if a
+           partition carries one of the names Windows gives its own:
+           Pop!_OS's 4 GB "recovery" partition has Windows' data type but
+           not its name, and the big one is Linux (the MSI, 2026-10-09). */
+        int esp = 0, large = 0, win_named = 0;
+        for (int i = 0; i < d->npart; i++) {
+            esp |= d->parts[i].is_esp;
+            large |= d->parts[i].bytes > 8ULL * 1000 * 1000 * 1000;
+            win_named |= strcasestr(d->parts[i].label, "Basic data partition") != NULL ||
+                         strcasestr(d->parts[i].label, "Microsoft reserved") != NULL;
         }
-        if (d->in_use)
+        d->has_system = esp && large;
+        d->has_windows = d->has_system && win_named;
+        if (d->in_use && (d->running || nmounted < 0))
             snprintf(d->summary, sizeof d->summary, "MyOS is running from this disk");
+        else if (d->in_use)             /* an earlier try mounted it; nothing unmounts yet */
+            snprintf(d->summary, sizeof d->summary, "in use: restart the computer to install here");
         else if (d->has_windows)
             snprintf(d->summary, sizeof d->summary, "Windows likely");
+        else if (d->has_system)
+            snprintf(d->summary, sizeof d->summary, "another system is installed");
         else if (d->npart)
             snprintf(d->summary, sizeof d->summary, "%d partition%s", d->npart, d->npart == 1 ? "" : "s");
         else

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # msi-chrome-report.sh — run on the Mac: log in to the MSI over ssh, try
 # Chromium the ways that matter, and save what happened in
 # build/msi-chrome-report.txt (for reading back on the Mac).

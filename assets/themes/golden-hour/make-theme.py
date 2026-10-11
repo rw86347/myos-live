@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 """
 make-theme.py — the "Golden Hour" desktop theme, drawn from one palette.
 

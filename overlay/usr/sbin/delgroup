@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # delgroup — BusyBox's delgroup syntax on top of shadow (see adduser).
 #
 #   delgroup GROUP                   delete GROUP

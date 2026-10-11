@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # Films and music from the menu, My Files, the desktop and the file types
 # (mimeapps.list): Player (myos-player), QuickTime Player's look, with
 # mplayer playing inside it. Started with no file, it shows the Open panel.

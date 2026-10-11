@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 """check-xscreen.py — is X's login screen showing? (make test-uefi-login)
 
 A text console (fbcon) uses a handful of colours. The login screen is drawn

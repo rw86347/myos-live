@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # xsession — what runs after a graphical login, as the user who logged in.
 # Their own ~/.xsession if they have one, else the IceWM desktop (the same
 # thing `startx` runs, /etc/X11/xinit/xinitrc). When this exits, the login

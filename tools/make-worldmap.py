@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 """make-worldmap.py LAND.geojson OUT.h — the Earth's land as a C table, for
 the installer's time zone map (live/myos-install/worldmap.h).
 
@@ -62,7 +64,9 @@ def main():
 
     npts = sum(map(len, kept))
     with open(out, "w") as h:
-        h.write(f"""/*
+        h.write(f"""/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
+/*
  * worldmap.h — the Earth's land, for the installer's time zone map.
  *
  * Made by tools/make-worldmap.py from Natural Earth's 1:110m land

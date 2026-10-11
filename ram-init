@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # Process 1 when the live USB's ext2 root is not visible (this kernel
 # has no USB mass storage yet). Same path as a disk boot: runit starts
 # myos-login, which starts X and draws the Golden Hour login.

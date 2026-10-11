@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * preview.h — Preview, MyOS's copy of Apple's Preview: what the parts share.
  *

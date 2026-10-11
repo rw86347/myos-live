@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 """tar2cpio.py — stream a tar to a newc cpio without unpacking on the Mac.
 
 Linux trees have names that differ only in case. The Mac cannot unpack them

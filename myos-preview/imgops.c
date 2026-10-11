@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * imgops.c — what Preview's Tools menu does to a picture's pixels. Every
  * function returns a new pixbuf (the old one stays as it was, for Undo).

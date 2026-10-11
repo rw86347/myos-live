@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * myos-settings — Settings, laid out like the Mac's System Settings.
  *
@@ -10,6 +12,9 @@
  * The panes, grouped and ordered as on the Mac: Wi-Fi, Network; General
  * (About, Storage, Date & Time), Displays, Wallpaper; Users & Groups (Add
  * User…, with an administrator's password: myos-adduser.c); Mouse & Keyboard.
+ * Kernel: the mode slider, the time slots as a wheel with their tasks'
+ * programs, and the power savings as cards (docs/KERNEL-CONFIG.md; saved by
+ * myos-kconfig.c into the myos-config partition).
  * Wi-Fi is listed although MyOS can't drive Wi-Fi yet, and says so.
  * Wallpaper is the Mac's page: the picture as it looks now, Fill Screen and
  * the other fits, Add Photo…, then the pictures and a row of colours.
@@ -39,11 +44,13 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/statvfs.h>
+#include <sys/stat.h>
 #include <sys/sysinfo.h>
 #include <sys/utsname.h>
 #include <time.h>
 #include <unistd.h>
 
+#include "kconfig.h"
 #include "scale.h"
 #include "wallpaper.h"
 
@@ -118,12 +125,12 @@ static void rgb(cairo_t *cr, uint32_t c)
 /* The Mac's settings icons: a white symbol on a coloured rounded square,
    lighter at the top. Drawn, not loaded, so they're sharp at every scale. */
 enum icon { IC_NETWORK, IC_GENERAL, IC_DISPLAYS, IC_USERS, IC_ABOUT, IC_STORAGE, IC_CLOCK, IC_ETHERNET,
-            IC_MOUSE, IC_WIFI, IC_WALLPAPER };
+            IC_MOUSE, IC_WIFI, IC_WALLPAPER, IC_KERNEL };
 
 static const uint32_t icon_colour[] = {
     [IC_NETWORK] = 0x2d7cf6, [IC_GENERAL] = 0x8e8e93, [IC_DISPLAYS] = 0x1c9ef0, [IC_USERS] = 0x5e5ce6,
     [IC_ABOUT] = 0x8e8e93,   [IC_STORAGE] = 0x8e8e93, [IC_CLOCK] = 0x2d7cf6,    [IC_ETHERNET] = 0x2d7cf6,
-    [IC_MOUSE] = 0x8e8e93,   [IC_WIFI] = 0x2d7cf6,    [IC_WALLPAPER] = 0x5ac8fa,
+    [IC_MOUSE] = 0x8e8e93,   [IC_WIFI] = 0x2d7cf6,    [IC_WALLPAPER] = 0x5ac8fa, [IC_KERNEL] = 0x3a5068,
 };
 
 static void draw_glyph(cairo_t *cr, enum icon ic, double s)
@@ -233,6 +240,20 @@ static void draw_glyph(cairo_t *cr, enum icon ic, double s)
         cairo_line_to(cr, s * .5, s * .42);
         cairo_move_to(cr, s * .32, s * .42);
         cairo_line_to(cr, s * .68, s * .42);
+        cairo_stroke(cr);
+        break;
+    case IC_KERNEL:                     /* a chip: a square with pins on every side */
+        rounded(cr, s * .3, s * .3, s * .4, s * .4, s * .05);
+        cairo_stroke(cr);
+        cairo_rectangle(cr, s * .41, s * .41, s * .18, s * .18);
+        cairo_fill(cr);
+        for (int i = 0; i < 3; i++) {
+            double p = s * (.38 + .12 * i);
+            cairo_move_to(cr, p, s * .3), cairo_line_to(cr, p, s * .19);
+            cairo_move_to(cr, p, s * .7), cairo_line_to(cr, p, s * .81);
+            cairo_move_to(cr, s * .3, p), cairo_line_to(cr, s * .19, p);
+            cairo_move_to(cr, s * .7, p), cairo_line_to(cr, s * .81, p);
+        }
         cairo_stroke(cr);
         break;
     case IC_WALLPAPER:                  /* a sun and two hills, the Mac's picture */
@@ -359,7 +380,27 @@ static void apply_css(void)
         ".bar-free { background-color: #e5e5ea; border-radius: %dpx; min-height: %dpx; }\n",
         S(5), S(8), S(10), S(6), S(12), S(10), S(10), S(4), S(10), S(26), S(7), S(10), S(16), S(6),
         S(26), S(26), S(6), S(10), S(9), S(12), S(30), S(10), S(12), S(2), S(3), S(10), S(3), S(10));
-    gtk_css_provider_load_from_data(css, s, -1, NULL);
+    /* Settings › Kernel (mockup B, docs/KERNEL-CONFIG.md). */
+    char *kcss = g_strdup_printf(
+        ".kbox { background-color: white; border: 1px solid #e3e3e6; border-radius: %dpx; padding: %dpx %dpx; }\n"
+        ".kcard { border: 1px solid #dcdad4; border-radius: %dpx; padding: %dpx; background-color: white; }\n"
+        ".kcard.on { border-color: #9ad3ab; background-color: #f6fcf7; }\n"
+        ".kcard.off { background-color: #f6f5f2; }\n"
+        ".kcard.off .kcard-title { color: #8a93a0; }\n"
+        ".kcard-title { font-weight: bold; font-size: 9pt; }\n"
+        ".kwhy { color: #c77700; font-size: 8pt; }\n"
+        ".kmeta { color: #6e6e73; font-size: 7.5pt; }\n"
+        ".knum { font-weight: bold; color: #6e6e73; }\n"
+        ".kmode { color: #6e6e73; } .kmode-on { color: #1d1d1f; font-weight: bold; }\n"
+        "entry.kos { color: #1b6b78; font-weight: bold; background-color: #eef4f5; }\n"
+        "entry.kbad { background-color: #fff3f3; border-color: #d70015; }\n"
+        "entry.kmono { font-family: 'DejaVu Sans Mono'; font-size: 9pt; }\n"
+        ".ktask { border-top: 1px solid #ececee; padding-top: %dpx; }\n",
+        S(10), S(10), S(14), S(8), S(8), S(7));
+    char *all = g_strconcat(s, kcss, NULL);
+    gtk_css_provider_load_from_data(css, all, -1, NULL);
+    g_free(all);
+    g_free(kcss);
     g_free(s);
 }
 
@@ -1112,11 +1153,10 @@ static void wipe_entry(GtkWidget *e)
 
 /* "Settings wants to make changes": an administrator's name and password,
    checked by the helper. On success both are left in name/pass. */
-static int ask_admin(char *name, char *pass)
+static int ask_admin(const char *why, char *name, char *pass)
 {
     GtkWidget *grid, *error;
-    GtkWidget *d = form_dialog("Settings", "Settings wants to add a user. Enter an administrator's name and "
-                               "password to allow this.", "Unlock", &grid, &error);
+    GtkWidget *d = form_dialog("Settings", why, "Unlock", &grid, &error);
     GtkWidget *who = form_entry(grid, 0, "User name", FALSE), *pw = form_entry(grid, 1, "Password", TRUE);
     struct passwd *me = getpwuid(getuid());
     if (me && in_group(me->pw_name, "wheel")) {
@@ -1201,7 +1241,8 @@ static void add_user_clicked(GtkButton *b, gpointer unused)
 {
     (void)b, (void)unused;
     char admin[FIELD_MAX + 1], apass[FIELD_MAX + 1];
-    if (!ask_admin(admin, apass))
+    if (!ask_admin("Settings wants to add a user. Enter an administrator's name and password to allow this.",
+                   admin, apass))
         return;
 
     GtkWidget *grid, *error;
@@ -1581,6 +1622,932 @@ static void page_wallpaper(GtkWidget *page)
 
 /* --- the window ------------------------------------------------------------------------------- */
 
+static void destroy_child(GtkWidget *w, gpointer unused);
+
+/* --- Kernel ----------------------------------------------------------------------------
+   docs/KERNEL-CONFIG.md, built as mockup B: the mode slider (realtime, soft
+   realtime, max power savings); in the two real-time modes the 20 ms frame
+   as a wheel with a name field beside each slot, and under it the task list
+   (which program runs in a task's slots, as whom); in power savings a grid
+   of cards, one per saving this computer has. Save checks everything
+   (kconfig.c), then /usr/libexec/myos-kconfig (setuid root) checks the
+   administrator's password and the config again and writes it to the
+   myos-config partition. The kernel doesn't read it yet: the page says so. */
+#define KCONFIG_HELPER "/usr/libexec/myos-kconfig"
+
+static struct kc_config kc;             /* what the page shows */
+static struct kc_machine kcm;
+static char kc_dev[64], kc_badge_text[256];
+static int kc_cleared;                  /* savings switched off on load: this computer lacks them */
+static GtkWidget *k_badge, *k_rail, *k_mode_label[3], *k_mode_desc, *k_body, *k_wheel, *k_entries[KC_SLOTS],
+    *k_chips[KC_SLOTS], *k_tasks, *k_cards, *k_status, *k_save;
+static const uint32_t k_colours[] = {0x0a84ff, 0xbf5af2, 0xff9f0a, 0x30d158, 0xff375f, 0x5e5ce6, 0x64b9d6, 0xac8e68,
+                                     0xe0b000};
+static const char *const k_mode_name[] = {"Realtime", "Soft realtime", "Max power savings"};
+static const char *const k_mode_text[] = {
+    "Named tasks get their slots exactly, every time: they start on the slot boundary and are stopped at its "
+    "end. No power management: the processor runs at its full rated speed (no boost) and only halts when there "
+    "is nothing to do; disks and devices never sleep.",
+    "Named tasks run first in their slots, but without a promise: one may start a little late or run a little "
+    "over. The processor may rest in idle states that wake within the latency budget. Its speed stays fixed, and "
+    "disks and devices stay on.",
+    "No time slots: every program takes its turn. The processor slows down and sleeps, and disks and devices "
+    "power down when idle. Choose which savings this computer uses.",
+};
+
+static void k_rebuild_body(void);
+static void k_rebuild_tasks(void);
+static void k_update_status(void);
+
+/* A task's colour: by its place in the task list. */
+static int k_task_index(const char *name)
+{
+    char names[KC_MAX_TASKS][KC_NAME];
+    int n = kc_tasks(&kc, names);
+    for (int i = 0; i < n; i++)
+        if (!strcmp(names[i], name))
+            return i;
+    return -1;
+}
+
+/* Fill the current path with a slot's colour: the OS striped teal, a
+   task its colour, a free slot light grey. */
+static void k_fill_slot(cairo_t *cr, const char *name, double w, double h)
+{
+    if (!strcmp(name, "os")) {
+        cairo_save(cr);
+        cairo_clip_preserve(cr);
+        rgb(cr, 0x1b6b78);
+        cairo_fill(cr);
+        rgb(cr, 0x2b8796);
+        cairo_set_line_width(cr, S(4));
+        for (double x = -h; x < w + h; x += S(8)) {
+            cairo_move_to(cr, x, 0);
+            cairo_line_to(cr, x + h, h);
+        }
+        cairo_stroke(cr);
+        cairo_restore(cr);
+        cairo_new_path(cr);
+        return;
+    }
+    int i = name[0] ? k_task_index(name) : -1;
+    rgb(cr, i >= 0 ? k_colours[i % (int)(sizeof k_colours / sizeof k_colours[0])] : 0xefede7);
+    cairo_fill(cr);
+}
+
+static gboolean k_draw_chip(GtkWidget *w, cairo_t *cr, gpointer data)
+{
+    int s = GPOINTER_TO_INT(data);
+    double cw = gtk_widget_get_allocated_width(w), ch = gtk_widget_get_allocated_height(w);
+    rounded(cr, 0, 0, cw, ch, S(2));
+    k_fill_slot(cr, kc.slots[s], cw, ch);
+    return TRUE;
+}
+
+/* The 20 ms frame as a wheel: slot 0 at 12 o'clock, clockwise; the OS
+   wedges (0 and 10) face each other. */
+static gboolean k_draw_wheel(GtkWidget *w, cairo_t *cr, gpointer unused)
+{
+    (void)unused;
+    double size = gtk_widget_get_allocated_width(w), cx = size / 2, cy = size / 2;
+    double R = size * .46, r = size * .28, seg = 2 * M_PI / KC_SLOTS;
+    for (int s = 0; s < KC_SLOTS; s++) {
+        double a0 = -M_PI / 2 + s * seg + .012, a1 = a0 + seg - .024;
+        cairo_new_path(cr);
+        cairo_arc(cr, cx, cy, R, a0, a1);
+        cairo_arc_negative(cr, cx, cy, r, a1, a0);
+        cairo_close_path(cr);
+        k_fill_slot(cr, kc.slots[s], size, size);
+        char num[4];
+        snprintf(num, sizeof num, "%d", s);
+        double am = a0 + seg / 2, tx = cx + (R + r) / 2 * cos(am), ty = cy + (R + r) / 2 * sin(am);
+        cairo_text_extents_t te;
+        cairo_select_font_face(cr, "DejaVu Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, S(10.5));
+        cairo_text_extents(cr, num, &te);
+        if (kc.slots[s][0])
+            cairo_set_source_rgb(cr, 1, 1, 1);
+        else
+            rgb(cr, 0x8a93a0);
+        cairo_move_to(cr, tx - te.width / 2 - te.x_bearing, ty - te.height / 2 - te.y_bearing);
+        cairo_show_text(cr, num);
+    }
+    const char *lines[] = {"20 ms", "then it repeats", "OS at 0 and 10"};
+    const double sizes[] = {S(20), S(10), S(9.5)}, dy[] = {-S(6), S(12), S(28)};
+    const uint32_t cols[] = {0x1d1d1f, 0x6e6e73, 0x1b6b78};
+    for (int i = 0; i < 3; i++) {
+        cairo_text_extents_t te;
+        cairo_select_font_face(cr, "DejaVu Sans", CAIRO_FONT_SLANT_NORMAL,
+                               i ? CAIRO_FONT_WEIGHT_NORMAL : CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, sizes[i]);
+        cairo_text_extents(cr, lines[i], &te);
+        rgb(cr, cols[i]);
+        cairo_move_to(cr, cx - te.width / 2 - te.x_bearing, cy + dy[i]);
+        cairo_show_text(cr, lines[i]);
+    }
+    return TRUE;
+}
+
+/* A click on a wedge goes to that slot's name field. */
+static gboolean k_wheel_click(GtkWidget *w, GdkEventButton *ev, gpointer unused)
+{
+    (void)unused;
+    double size = gtk_widget_get_allocated_width(w), dx = ev->x - size / 2, dy = ev->y - size / 2;
+    double a = atan2(dy, dx) + M_PI / 2;
+    if (a < 0)
+        a += 2 * M_PI;
+    int s = (int)(a / (2 * M_PI / KC_SLOTS)) % KC_SLOTS;
+    if (s != 0 && s != 10)
+        gtk_widget_grab_focus(k_entries[s]);
+    return TRUE;
+}
+
+/* The slider: three stops with pictures on a rail from blue to green. */
+static void k_glyph(cairo_t *cr, int mode, double x, double y, double s)
+{
+    cairo_set_line_width(cr, s * .09);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    if (mode == 0) {                    /* a stopwatch */
+        rgb(cr, 0x0a64d6);
+        cairo_arc(cr, x, y + s * .06, s * .32, 0, 2 * M_PI);
+        cairo_stroke(cr);
+        cairo_rectangle(cr, x - s * .1, y - s * .42, s * .2, s * .1);
+        cairo_fill(cr);
+        cairo_move_to(cr, x, y + s * .06);
+        cairo_line_to(cr, x, y - s * .14);
+        cairo_stroke(cr);
+    } else if (mode == 1) {             /* a wave */
+        rgb(cr, 0x6d5fe0);
+        cairo_move_to(cr, x - s * .4, y + s * .05);
+        cairo_curve_to(cr, x - s * .25, y - s * .4, x - s * .1, y - s * .4, x, y);
+        cairo_curve_to(cr, x + s * .1, y + s * .4, x + s * .25, y + s * .4, x + s * .4, y - s * .05);
+        cairo_stroke(cr);
+    } else {                            /* a leaf */
+        rgb(cr, 0x2fae5a);
+        cairo_move_to(cr, x - s * .32, y + s * .32);
+        cairo_curve_to(cr, x - s * .32, y - s * .14, x - s * .04, y - s * .32, x + s * .36, y - s * .36);
+        cairo_curve_to(cr, x + s * .36, y + s * .06, x + s * .1, y + s * .32, x - s * .32, y + s * .32);
+        cairo_fill(cr);
+        cairo_set_source_rgb(cr, 1, 1, 1);
+        cairo_set_line_width(cr, s * .05);
+        cairo_move_to(cr, x - s * .28, y + s * .28);
+        cairo_line_to(cr, x + s * .12, y - s * .1);
+        cairo_stroke(cr);
+    }
+}
+
+static double k_stop_x(double w, int i)
+{
+    double r = S(26);
+    return i == 0 ? r + 2 : i == 1 ? w / 2 : w - r - 2;
+}
+
+static gboolean k_draw_rail(GtkWidget *w, cairo_t *cr, gpointer unused)
+{
+    (void)unused;
+    double wd = gtk_widget_get_allocated_width(w), h = gtk_widget_get_allocated_height(w), cy = h / 2;
+    double r = S(26), x0 = k_stop_x(wd, 0), x2 = k_stop_x(wd, 2);
+    cairo_pattern_t *p = cairo_pattern_create_linear(x0, 0, x2, 0);
+    cairo_pattern_add_color_stop_rgb(p, 0, 0x2f / 255.0, 0x6f / 255.0, 0xd6 / 255.0);
+    cairo_pattern_add_color_stop_rgb(p, .5, 0x6d / 255.0, 0x5f / 255.0, 0xe0 / 255.0);
+    cairo_pattern_add_color_stop_rgb(p, 1, 0x2f / 255.0, 0xae / 255.0, 0x5a / 255.0);
+    rounded(cr, x0, cy - S(5), x2 - x0, S(10), S(5));
+    cairo_set_source(cr, p);
+    cairo_fill(cr);
+    cairo_pattern_destroy(p);
+    for (int i = 0; i < 3; i++) {
+        double x = k_stop_x(wd, i);
+        if (i == kc.mode) {
+            cairo_arc(cr, x, cy, r + S(4), 0, 2 * M_PI);
+            cairo_set_source_rgba(cr, 0x0a / 255.0, 0x64 / 255.0, 0xd6 / 255.0, .22);
+            cairo_fill(cr);
+        }
+        cairo_arc(cr, x, cy, r, 0, 2 * M_PI);
+        cairo_set_source_rgb(cr, 1, 1, 1);
+        cairo_fill_preserve(cr);
+        rgb(cr, i == kc.mode ? 0x0a64d6 : 0xd4d2cb);
+        cairo_set_line_width(cr, S(2));
+        cairo_stroke(cr);
+        k_glyph(cr, i, x, cy, S(30));
+    }
+    return TRUE;
+}
+
+static void k_set_mode(int m)
+{
+    if (m == kc.mode)
+        return;
+    kc.mode = m;
+    gtk_widget_queue_draw(k_rail);
+    for (int i = 0; i < 3; i++) {
+        GtkStyleContext *sc = gtk_widget_get_style_context(k_mode_label[i]);
+        if (i == m)
+            gtk_style_context_add_class(sc, "kmode-on");
+        else
+            gtk_style_context_remove_class(sc, "kmode-on");
+    }
+    gtk_label_set_text(GTK_LABEL(k_mode_desc), k_mode_text[m]);
+    k_rebuild_body();
+    k_update_status();
+}
+
+static gboolean k_rail_click(GtkWidget *w, GdkEventButton *ev, gpointer unused)
+{
+    (void)unused;
+    double wd = gtk_widget_get_allocated_width(w);
+    int best = 0;
+    for (int i = 1; i < 3; i++)
+        if (fabs(ev->x - k_stop_x(wd, i)) < fabs(ev->x - k_stop_x(wd, best)))
+            best = i;
+    k_set_mode(best);
+    return TRUE;
+}
+
+/* A white rounded box, like the other panes' groups, for free-form content. */
+static GtkWidget *k_box(GtkWidget *parent, const char *title, const char *sub)
+{
+    GtkWidget *v = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(8));
+    gtk_style_context_add_class(gtk_widget_get_style_context(v), "kbox");
+    if (title) {
+        GtkWidget *h = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(8));
+        gtk_box_pack_start(GTK_BOX(h), label_new(title, "section", 0), FALSE, FALSE, 0);
+        if (sub) {
+            GtkWidget *s = label_new(sub, "footnote", 0);
+            gtk_widget_set_valign(s, GTK_ALIGN_BASELINE);
+            gtk_box_pack_start(GTK_BOX(h), s, TRUE, TRUE, 0);
+        }
+        gtk_box_pack_start(GTK_BOX(v), h, FALSE, FALSE, 0);
+    }
+    gtk_box_pack_start(GTK_BOX(parent), v, FALSE, FALSE, 0);
+    return v;
+}
+
+static void k_mark(GtkWidget *w, const char *cls, int on)
+{
+    GtkStyleContext *sc = gtk_widget_get_style_context(w);
+    if (on)
+        gtk_style_context_add_class(sc, cls);
+    else
+        gtk_style_context_remove_class(sc, cls);
+}
+
+/* --- the slots and the tasks --- */
+
+static void k_slot_changed(GtkEditable *e, gpointer data)
+{
+    int s = GPOINTER_TO_INT(data);
+    snprintf(kc.slots[s], KC_NAME, "%s", gtk_entry_get_text(GTK_ENTRY(e)));
+    k_mark(GTK_WIDGET(e), "kbad", kc.slots[s][0] && !kc_good_name(kc.slots[s]));
+    if (kc.slots[s][0] && kc_good_name(kc.slots[s]))
+        kc_prog(&kc, kc.slots[s], 1);   /* a new name runs /bin/<name> until told otherwise */
+    gtk_widget_queue_draw(k_wheel);
+    for (int i = 0; i < KC_SLOTS; i++)
+        gtk_widget_queue_draw(k_chips[i]);
+    k_rebuild_tasks();
+    k_update_status();
+}
+
+static GtkWidget *k_slot_row(int s, int left)
+{
+    GtkWidget *h = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(6));
+    char num[4];
+    snprintf(num, sizeof num, "%d", s);
+    GtkWidget *n = label_new(num, "knum", left ? 0 : 1);
+    gtk_widget_set_size_request(n, S(18), -1);
+    GtkWidget *chip = k_chips[s] = gtk_drawing_area_new();
+    gtk_widget_set_size_request(chip, S(9), S(18));
+    gtk_widget_set_valign(chip, GTK_ALIGN_CENTER);
+    g_signal_connect(chip, "draw", G_CALLBACK(k_draw_chip), GINT_TO_POINTER(s));
+    GtkWidget *e = k_entries[s] = gtk_entry_new();
+    gtk_entry_set_width_chars(GTK_ENTRY(e), 12);
+    if (s == 0 || s == 10) {
+        gtk_entry_set_text(GTK_ENTRY(e), "OS (system)");
+        gtk_widget_set_sensitive(e, FALSE);
+        gtk_style_context_add_class(gtk_widget_get_style_context(e), "kos");
+        gtk_widget_set_tooltip_text(e, "The kernel and the desktop's own programs: every 10 ms, always.");
+    } else {
+        gtk_entry_set_max_length(GTK_ENTRY(e), KC_NAME - 1);
+        gtk_entry_set_placeholder_text(GTK_ENTRY(e), "free");
+        gtk_entry_set_text(GTK_ENTRY(e), kc.slots[s]);
+        k_mark(e, "kbad", kc.slots[s][0] && !kc_good_name(kc.slots[s]));
+        g_signal_connect(e, "changed", G_CALLBACK(k_slot_changed), GINT_TO_POINTER(s));
+    }
+    if (left) {
+        gtk_box_pack_start(GTK_BOX(h), e, TRUE, TRUE, 0);
+        gtk_box_pack_start(GTK_BOX(h), chip, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(h), n, FALSE, FALSE, 0);
+    } else {
+        gtk_box_pack_start(GTK_BOX(h), n, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(h), chip, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(h), e, TRUE, TRUE, 0);
+    }
+    return h;
+}
+
+/* Who a task may run as: nobody, the people with accounts, root. */
+struct k_user {
+    char name[33];
+    unsigned uid, gid;
+};
+static struct k_user k_users[24];
+static int k_nusers;
+
+static void k_load_users(void)
+{
+    struct passwd *pw;
+    k_nusers = 0;
+    snprintf(k_users[k_nusers].name, sizeof k_users[0].name, "nobody");
+    k_users[k_nusers].uid = k_users[k_nusers].gid = 65534;
+    k_nusers++;
+    setpwent();
+    while ((pw = getpwent()) && k_nusers < 23)
+        if (pw->pw_uid >= 1000 && pw->pw_uid < 60000) {
+            snprintf(k_users[k_nusers].name, sizeof k_users[0].name, "%s", pw->pw_name);
+            k_users[k_nusers].uid = pw->pw_uid;
+            k_users[k_nusers].gid = pw->pw_gid;
+            k_nusers++;
+        }
+    endpwent();
+    snprintf(k_users[k_nusers].name, sizeof k_users[0].name, "root");
+    k_users[k_nusers].uid = k_users[k_nusers].gid = 0;
+    k_nusers++;
+}
+
+static void k_program_changed(GtkEditable *e, gpointer data)
+{
+    struct kc_task *t = kc_prog(&kc, data, 0);
+    if (!t)
+        return;
+    snprintf(t->program, sizeof t->program, "%s", gtk_entry_get_text(GTK_ENTRY(e)));
+    struct stat st;
+    k_mark(GTK_WIDGET(e), "kbad", t->program[0] != '/' || stat(t->program, &st) || !(st.st_mode & 0111));
+    k_update_status();
+}
+
+static void k_args_changed(GtkEditable *e, gpointer data)
+{
+    struct kc_task *t = kc_prog(&kc, data, 0);
+    if (t)
+        snprintf(t->args, sizeof t->args, "%s", gtk_entry_get_text(GTK_ENTRY(e)));
+    k_update_status();
+}
+
+static void k_user_changed(GtkComboBox *c, gpointer data)
+{
+    struct kc_task *t = kc_prog(&kc, data, 0);
+    int i = gtk_combo_box_get_active(c);
+    if (t && i >= 0 && i < k_nusers) {
+        t->uid = k_users[i].uid;
+        t->gid = k_users[i].gid;
+    }
+    k_update_status();
+}
+
+static void k_boot_toggled(GtkToggleButton *b, gpointer data)
+{
+    struct kc_task *t = kc_prog(&kc, data, 0);
+    if (t)
+        t->start_at_boot = gtk_toggle_button_get_active(b);
+    k_update_status();
+}
+
+static void k_restart_toggled(GtkToggleButton *b, gpointer data)
+{
+    struct kc_task *t = kc_prog(&kc, data, 0);
+    if (t)
+        t->restart = gtk_toggle_button_get_active(b);
+    k_update_status();
+}
+
+static void k_choose_program(GtkButton *b, gpointer entry)
+{
+    (void)b;
+    GtkWidget *d = gtk_file_chooser_dialog_new("Choose the program", GTK_WINDOW(window), GTK_FILE_CHOOSER_ACTION_OPEN,
+                                               "Cancel", GTK_RESPONSE_CANCEL, "Choose", GTK_RESPONSE_ACCEPT, NULL);
+    gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(d), "/usr/bin");
+    if (gtk_dialog_run(GTK_DIALOG(d)) == GTK_RESPONSE_ACCEPT) {
+        char *f = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(d));
+        if (f)
+            gtk_entry_set_text(GTK_ENTRY(entry), f);
+        g_free(f);
+    }
+    gtk_widget_destroy(d);
+}
+
+static void k_rebuild_tasks(void)
+{
+    if (!k_tasks)
+        return;
+    gtk_container_foreach(GTK_CONTAINER(k_tasks), destroy_child, NULL);
+    char names[KC_MAX_TASKS][KC_NAME];
+    int n = kc_tasks(&kc, names);
+    if (!n)
+        gtk_box_pack_start(GTK_BOX(k_tasks), label_new("Name a slot on the wheel to add a task.", "blurb", 0), FALSE,
+                           FALSE, 0);
+    for (int i = 0; i < n; i++) {
+        struct kc_task *t = kc_prog(&kc, names[i], 1);
+        if (!t || !kc_good_name(names[i]))
+            continue;
+        char *key = g_strdup(t->name);  /* the handlers' data, freed with the row */
+        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(5));
+        gtk_style_context_add_class(gtk_widget_get_style_context(row), "ktask");
+        g_object_set_data_full(G_OBJECT(row), "task", key, g_free);
+
+        GtkWidget *top = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(8));
+        int sl[KC_SLOTS], k = kc_task_slots(&kc, t->name, sl);
+        GtkWidget *chip = gtk_drawing_area_new();
+        gtk_widget_set_size_request(chip, S(11), S(11));
+        gtk_widget_set_valign(chip, GTK_ALIGN_CENTER);
+        g_signal_connect(chip, "draw", G_CALLBACK(k_draw_chip), GINT_TO_POINTER(sl[0]));
+        gtk_box_pack_start(GTK_BOX(top), chip, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(top), label_new(t->name, "section", 0), FALSE, FALSE, 0);
+        char cad[64], info[160];
+        kc_cadence(sl, k, cad, sizeof cad);
+        size_t at = (size_t)snprintf(info, sizeof info, "%s · slot%s ", cad, k > 1 ? "s" : "");
+        for (int j = 0; j < k && at < sizeof info; j++)
+            at += (size_t)snprintf(info + at, sizeof info - at, "%s%d", j ? ", " : "", sl[j]);
+        gtk_box_pack_start(GTK_BOX(top), label_new(info, "footnote", 0), FALSE, FALSE, 0);
+        gtk_box_pack_end(GTK_BOX(top), label_new("not started: myos-taskd comes in a later step", "footnote", 1), FALSE,
+                         FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(row), top, FALSE, FALSE, 0);
+
+        GtkWidget *l2 = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(8));
+        gtk_widget_set_margin_start(l2, S(19));
+        gtk_box_pack_start(GTK_BOX(l2), label_new("Program", "value", 0), FALSE, FALSE, 0);
+        GtkWidget *prog = gtk_entry_new();
+        gtk_entry_set_max_length(GTK_ENTRY(prog), KC_PROGRAM - 1);
+        gtk_entry_set_text(GTK_ENTRY(prog), t->program);
+        gtk_style_context_add_class(gtk_widget_get_style_context(prog), "kmono");
+        struct stat st;
+        k_mark(prog, "kbad", t->program[0] != '/' || stat(t->program, &st) || !(st.st_mode & 0111));
+        g_signal_connect(prog, "changed", G_CALLBACK(k_program_changed), key);
+        gtk_box_pack_start(GTK_BOX(l2), prog, TRUE, TRUE, 0);
+        GtkWidget *choose = gtk_button_new_with_label("Choose…");
+        g_signal_connect(choose, "clicked", G_CALLBACK(k_choose_program), prog);
+        gtk_box_pack_start(GTK_BOX(l2), choose, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(row), l2, FALSE, FALSE, 0);
+
+        GtkWidget *l3 = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(8));
+        gtk_widget_set_margin_start(l3, S(19));
+        gtk_box_pack_start(GTK_BOX(l3), label_new("Arguments", "value", 0), FALSE, FALSE, 0);
+        GtkWidget *args = gtk_entry_new();
+        gtk_entry_set_max_length(GTK_ENTRY(args), KC_ARGS - 2);
+        gtk_entry_set_width_chars(GTK_ENTRY(args), 14);
+        gtk_entry_set_text(GTK_ENTRY(args), t->args);
+        gtk_style_context_add_class(gtk_widget_get_style_context(args), "kmono");
+        g_signal_connect(args, "changed", G_CALLBACK(k_args_changed), key);
+        gtk_box_pack_start(GTK_BOX(l3), args, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(l3), label_new("Run as", "value", 0), FALSE, FALSE, S(6));
+        GtkWidget *who = gtk_combo_box_text_new();
+        int sel = 0;
+        for (int u = 0; u < k_nusers; u++) {
+            gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(who), k_users[u].name);
+            if (k_users[u].uid == t->uid)
+                sel = u;
+        }
+        gtk_combo_box_set_active(GTK_COMBO_BOX(who), sel);
+        g_signal_connect(who, "changed", G_CALLBACK(k_user_changed), key);
+        gtk_box_pack_start(GTK_BOX(l3), who, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(row), l3, FALSE, FALSE, 0);
+
+        GtkWidget *l4 = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(14));
+        gtk_widget_set_margin_start(l4, S(19));
+        GtkWidget *boot = gtk_check_button_new_with_label("Start at boot");
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(boot), t->start_at_boot);
+        g_signal_connect(boot, "toggled", G_CALLBACK(k_boot_toggled), key);
+        GtkWidget *again = gtk_check_button_new_with_label("Restart if it stops");
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(again), t->restart);
+        g_signal_connect(again, "toggled", G_CALLBACK(k_restart_toggled), key);
+        gtk_box_pack_start(GTK_BOX(l4), boot, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(l4), again, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(row), l4, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(k_tasks), row, FALSE, FALSE, 0);
+    }
+    GtkWidget *foot = label_new("Only the program set here, started by the system, can use a task's slots. A program "
+                                "that merely calls itself by a task's name gets nothing.", "footnote", 0);
+    gtk_box_pack_start(GTK_BOX(k_tasks), foot, FALSE, FALSE, 0);
+    gtk_widget_show_all(k_tasks);
+}
+
+static void k_budget_changed(GtkRange *r, gpointer label)
+{
+    kc.latency_budget_us = (unsigned)gtk_range_get_value(r);
+    const struct kcstate *cs = kc_soft_cstate(&kcm, kc.latency_budget_us);
+    char t[200];
+    snprintf(t, sizeof t, "Wake within %u µs: the processor may rest down to %s (wakes in about %d µs). "
+             "Nothing else saves power in this mode.", kc.latency_budget_us, cs->name, cs->wake_us);
+    gtk_label_set_text(GTK_LABEL(label), t);
+    k_update_status();
+}
+
+/* --- the power cards --- */
+
+static gboolean k_rebuild_cards_idle(gpointer unused);
+
+static void k_switch_toggled(GObject *sw, GParamSpec *ps, gpointer data)
+{
+    (void)ps;
+    int bit = GPOINTER_TO_INT(data);
+    if (gtk_switch_get_active(GTK_SWITCH(sw)))
+        kc.power_on |= 1u << bit;
+    else
+        kc.power_on &= ~(1u << bit);
+    g_idle_add(k_rebuild_cards_idle, NULL);   /* not from inside the switch's own signal */
+    k_update_status();
+}
+
+static void k_spin_changed(GtkSpinButton *s, gpointer field)
+{
+    *(int *)field = gtk_spin_button_get_value_as_int(s);
+    k_update_status();
+}
+
+static void k_cstate_changed(GtkComboBox *c, gpointer unused)
+{
+    (void)unused;
+    const char *id = gtk_combo_box_get_active_id(c);
+    if (id)
+        kc.cstate_max = atoi(id);
+    k_update_status();
+}
+
+static GtkWidget *k_spin(int lo, int hi, int *field)
+{
+    GtkWidget *s = gtk_spin_button_new_with_range(lo, hi, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(s), *field);
+    g_signal_connect(s, "value-changed", G_CALLBACK(k_spin_changed), field);
+    return s;
+}
+
+/* A saving's own settings, inside its card once it is switched on. */
+static void k_card_settings(GtkWidget *card, const struct kfeature *f)
+{
+    GtkWidget *h = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(5));
+    if (!strcmp(f->key, "cpu_speed")) {
+        gtk_box_pack_start(GTK_BOX(h), k_spin(10, 100, &kc.cpu_min_pct), FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(h), label_new("to", "footnote", 0), FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(h), k_spin(10, 100, &kc.cpu_max_pct), FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(h), label_new("% speed", "footnote", 0), FALSE, FALSE, 0);
+    } else if (!strcmp(f->key, "deep_idle")) {
+        gtk_box_pack_start(GTK_BOX(h), label_new("Deepest", "footnote", 0), FALSE, FALSE, 0);
+        GtkWidget *c = gtk_combo_box_text_new();
+        for (int i = 0; i < kc_ncstates(); i++) {
+            const struct kcstate *cs = kc_cstate(i);
+            if (!kc_cstate_ok(&kcm, cs->n))
+                continue;
+            char id[4];
+            snprintf(id, sizeof id, "%d", cs->n);
+            gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(c), id, cs->name);
+        }
+        char cur[4];
+        snprintf(cur, sizeof cur, "%d", kc.cstate_max);
+        if (!gtk_combo_box_set_active_id(GTK_COMBO_BOX(c), cur))
+            gtk_combo_box_set_active(GTK_COMBO_BOX(c), 0);
+        g_signal_connect(c, "changed", G_CALLBACK(k_cstate_changed), NULL);
+        gtk_box_pack_start(GTK_BOX(h), c, FALSE, FALSE, 0);
+    } else if (!strcmp(f->key, "disk_spindown")) {
+        gtk_box_pack_start(GTK_BOX(h), label_new("After", "footnote", 0), FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(h), k_spin(1, 600, &kc.spindown_min), FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(h), label_new("minutes", "footnote", 0), FALSE, FALSE, 0);
+    } else {
+        gtk_widget_destroy(h);
+        return;
+    }
+    gtk_box_pack_start(GTK_BOX(card), h, FALSE, FALSE, 0);
+}
+
+static void k_rebuild_cards(void)
+{
+    if (!k_cards)
+        return;
+    gtk_container_foreach(GTK_CONTAINER(k_cards), destroy_child, NULL);
+    for (int i = 0; i < kc_nfeatures(); i++) {
+        const struct kfeature *f = kc_feature(i);
+        const char *why = NULL;
+        int ok = kc_feature_ok(&kcm, f, &why), on = ok && (kc.power_on >> f->bit & 1);
+        GtkWidget *card = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(5));
+        GtkStyleContext *sc = gtk_widget_get_style_context(card);
+        gtk_style_context_add_class(sc, "kcard");
+        gtk_style_context_add_class(sc, !ok ? "off" : on ? "on" : "idle");
+        GtkWidget *top = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(6));
+        GtkWidget *name = label_new(f->label, "kcard-title", 0);
+        gtk_label_set_max_width_chars(GTK_LABEL(name), 18);
+        gtk_box_pack_start(GTK_BOX(top), name, TRUE, TRUE, 0);
+        GtkWidget *sw = gtk_switch_new();
+        gtk_switch_set_active(GTK_SWITCH(sw), on);
+        gtk_widget_set_sensitive(sw, ok);
+        gtk_widget_set_valign(sw, GTK_ALIGN_START);
+        g_signal_connect(sw, "notify::active", G_CALLBACK(k_switch_toggled), GINT_TO_POINTER(f->bit));
+        gtk_box_pack_end(GTK_BOX(top), sw, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(card), top, FALSE, FALSE, 0);
+        GtkWidget *what = label_new(ok ? f->what : why, ok ? "footnote" : "kwhy", 0);
+        gtk_label_set_max_width_chars(GTK_LABEL(what), 24);
+        gtk_box_pack_start(GTK_BOX(card), what, FALSE, FALSE, 0);
+        if (ok == KC_MAYBE)                 /* only the kernel can tell: it skips what isn't there */
+            gtk_box_pack_start(GTK_BOX(card), label_new("Checked when MyOS starts", "kmeta", 0), FALSE, FALSE, 0);
+        if (on)
+            k_card_settings(card, f);
+        char meta[96];
+        size_t at = (size_t)snprintf(meta, sizeof meta, "%s saves",
+                                     f->saves >= 3 ? "●●●" : f->saves == 2 ? "●●○" : "●○○");
+        if (f->wake_us)
+            at += (size_t)snprintf(meta + at, sizeof meta - at, " · wakes ~%d µs", f->wake_us);
+        if (f->slows_cpu && at < sizeof meta)
+            snprintf(meta + at, sizeof meta - at, " · slower code");
+        GtkWidget *m = label_new(meta, "kmeta", 0);
+        gtk_widget_set_valign(m, GTK_ALIGN_END);
+        gtk_box_pack_end(GTK_BOX(card), m, TRUE, TRUE, 0);
+        gtk_grid_attach(GTK_GRID(k_cards), card, i % 3, i / 3, 1, 1);
+    }
+    gtk_widget_show_all(k_cards);
+}
+
+static gboolean k_rebuild_cards_idle(gpointer unused)
+{
+    (void)unused;
+    k_rebuild_cards();
+    return G_SOURCE_REMOVE;
+}
+
+/* --- the page --- */
+
+static void k_rebuild_body(void)
+{
+    gtk_container_foreach(GTK_CONTAINER(k_body), destroy_child, NULL);
+    k_tasks = k_cards = k_wheel = NULL;
+    char names[KC_MAX_TASKS][KC_NAME];
+    int n = kc_tasks(&kc, names);
+    if (kc.mode == KC_POWER) {
+        GtkWidget *b = k_box(k_body, "Time slots are off in this mode", NULL);
+        char t[400];
+        size_t at = (size_t)snprintf(t, sizeof t, "Every program takes its turn on the processor.");
+        if (n) {
+            at += (size_t)snprintf(t + at, sizeof t - at, " Your tasks (");
+            for (int i = 0; i < n && at < sizeof t; i++)
+                at += (size_t)snprintf(t + at, sizeof t - at, "%s%s", i ? ", " : "", names[i]);
+            if (at < sizeof t)
+                snprintf(t + at, sizeof t - at, ") still start after boot, as ordinary programs, and get their "
+                         "slots back when you move the slider back.");
+        }
+        gtk_box_pack_start(GTK_BOX(b), label_new(t, "blurb", 0), FALSE, FALSE, 0);
+        char sub[160];
+        snprintf(sub, sizeof sub, "%s", kcm.family >= 0 ? kc_family_name(kcm.family) : kcm.cpu);
+        b = k_box(k_body, "Savings on this computer", sub);
+        if (kcm.virt)
+            gtk_box_pack_start(GTK_BOX(b), label_new("This is a virtual machine: the host (your Mac) manages the "
+                                                     "real processor's power, so most processor savings don't apply "
+                                                     "here. The device savings still do.", "blurb", 0), FALSE, FALSE, 0);
+        k_cards = gtk_grid_new();
+        gtk_grid_set_column_spacing(GTK_GRID(k_cards), S(8));
+        gtk_grid_set_row_spacing(GTK_GRID(k_cards), S(8));
+        gtk_grid_set_column_homogeneous(GTK_GRID(k_cards), TRUE);
+        gtk_box_pack_start(GTK_BOX(b), k_cards, FALSE, FALSE, 0);
+        k_rebuild_cards();
+    } else {
+        GtkWidget *b = k_box(k_body, "Time slots", "Each wedge is 1 ms. The same name in several slots is one task.");
+        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(10));
+        GtkWidget *left = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(3)), *right = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(3));
+        gtk_widget_set_valign(left, GTK_ALIGN_CENTER);
+        gtk_widget_set_valign(right, GTK_ALIGN_CENTER);
+        for (int s = 19; s >= 10; s--)  /* beside their wedges: 19 at the top-left, 10 at the bottom */
+            gtk_box_pack_start(GTK_BOX(left), k_slot_row(s, 1), FALSE, FALSE, 0);
+        for (int s = 0; s <= 9; s++)
+            gtk_box_pack_start(GTK_BOX(right), k_slot_row(s, 0), FALSE, FALSE, 0);
+        k_wheel = gtk_drawing_area_new();
+        gtk_widget_set_size_request(k_wheel, S(236), S(236));
+        gtk_widget_set_valign(k_wheel, GTK_ALIGN_CENTER);
+        gtk_widget_add_events(k_wheel, GDK_BUTTON_PRESS_MASK);
+        g_signal_connect(k_wheel, "draw", G_CALLBACK(k_draw_wheel), NULL);
+        g_signal_connect(k_wheel, "button-press-event", G_CALLBACK(k_wheel_click), NULL);
+        gtk_box_pack_start(GTK_BOX(row), left, TRUE, TRUE, 0);
+        gtk_box_pack_start(GTK_BOX(row), k_wheel, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(row), right, TRUE, TRUE, 0);
+        gtk_box_pack_start(GTK_BOX(b), row, FALSE, FALSE, 0);
+
+        b = k_box(k_body, "Tasks", "Started after boot, each running only in its own slots");
+        k_tasks = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(8));
+        gtk_box_pack_start(GTK_BOX(b), k_tasks, FALSE, FALSE, 0);
+        k_rebuild_tasks();
+
+        if (kc.mode == KC_SOFT) {
+            b = k_box(k_body, "Latency budget", "How late a task may start because the processor was resting");
+            GtkWidget *h = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(12));
+            GtkWidget *l = label_new("", "footnote", 0);
+            gtk_label_set_max_width_chars(GTK_LABEL(l), 40);
+            GtkWidget *sc = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 1, 500, 1);
+            gtk_scale_set_draw_value(GTK_SCALE(sc), FALSE);
+            gtk_widget_set_size_request(sc, S(200), -1);
+            gtk_range_set_value(GTK_RANGE(sc), kc.latency_budget_us);
+            g_signal_connect(sc, "value-changed", G_CALLBACK(k_budget_changed), l);
+            gtk_box_pack_start(GTK_BOX(h), l, TRUE, TRUE, 0);
+            gtk_box_pack_end(GTK_BOX(h), sc, FALSE, FALSE, 0);
+            gtk_box_pack_start(GTK_BOX(b), h, FALSE, FALSE, 0);
+            k_budget_changed(GTK_RANGE(sc), l);
+        }
+    }
+    gtk_widget_show_all(k_body);
+}
+
+static void k_update_status(void)
+{
+    static struct kc_msgs m;            /* 13 KB: not on the stack */
+    char t[400];
+    kc_check(&kc, &kcm, 1, &m);
+    k_mark(k_status, "error", m.nerr > 0);
+    if (m.nerr)
+        snprintf(t, sizeof t, "✕ %d problem%s: %s", m.nerr, m.nerr > 1 ? "s" : "", m.err[0]);
+    else if (m.nwarn)
+        snprintf(t, sizeof t, "! %s — you can still save", m.warn[0]);
+    else if (kc_dev[0])
+        snprintf(t, sizeof t, "✓ Ready to save, to myos-config (%s).", kc_dev);
+    else
+        snprintf(t, sizeof t, "✓ Ready, but this disk has no myos-config partition to save to.");
+    gtk_label_set_text(GTK_LABEL(k_status), t);
+    gtk_widget_set_sensitive(k_save, !m.nerr && kc_dev[0]);
+}
+
+/* Ask the helper; its whole answer comes back in *out (g_free it). */
+static int k_helper(const char *request, char **out)
+{
+    char *argv[] = {KCONFIG_HELPER, NULL};
+    GPid pid;
+    int in, fd;
+    *out = NULL;
+    if (!g_spawn_async_with_pipes(NULL, argv, NULL, G_SPAWN_DO_NOT_REAP_CHILD, NULL, NULL, &pid, &in, &fd, NULL,
+                                  NULL)) {
+        *out = g_strdup("Can't start " KCONFIG_HELPER ".");
+        return -1;
+    }
+    size_t n = strlen(request), done = 0;
+    while (done < n) {
+        ssize_t w = write(in, request + done, n - done);
+        if (w <= 0)
+            break;
+        done += (size_t)w;
+    }
+    close(in);
+    GString *s = g_string_new(NULL);
+    char buf[4096];
+    ssize_t r;
+    while ((r = read(fd, buf, sizeof buf)) > 0)
+        g_string_append_len(s, buf, r);
+    close(fd);
+    struct helper_wait w = {g_main_loop_new(NULL, FALSE), -1};
+    g_child_watch_add(pid, helper_done, &w);
+    g_main_loop_run(w.loop);
+    g_main_loop_unref(w.loop);
+    *out = g_string_free(s, FALSE);
+    return w.status == 0 ? 0 : -1;
+}
+
+/* What is on the disk now. */
+static void k_load(void)
+{
+    char *reply;
+    k_helper("read\n", &reply);
+    kc_default(&kc);
+    kc_dev[0] = 0;
+    kc_cleared = 0;
+    if (!strncmp(reply, "ok ", 3)) {
+        char which = '?', err[200];
+        unsigned gen = 0;
+        sscanf(reply + 3, "%c %u %63s", &which, &gen, kc_dev);
+        const char *text = strchr(reply, '\n');
+        if (text && !kc_parse(text + 1, &kc, err, sizeof err))
+            snprintf(kc_badge_text, sizeof kc_badge_text, "Saved: generation %u, copy %c of myos-config (%s).", gen,
+                     which, kc_dev);
+        else
+            snprintf(kc_badge_text, sizeof kc_badge_text, "What's saved can't be read: %s", text ? err : reply);
+    } else if (!strncmp(reply, "none ", 5)) {
+        char path[64];
+        if (!kc_find_partition(path, sizeof path))
+            snprintf(kc_dev, sizeof kc_dev, "%s", path);
+        snprintf(kc_badge_text, sizeof kc_badge_text, "Nothing saved yet: %s", reply + 5);
+        kc_badge_text[strcspn(kc_badge_text, "\n")] = 0;
+    } else
+        snprintf(kc_badge_text, sizeof kc_badge_text, "%s", reply);
+    g_free(reply);
+    /* Savings this computer lacks (the disk may have come from another). */
+    for (int i = 0; i < kc_nfeatures(); i++) {
+        const char *why;
+        const struct kfeature *f = kc_feature(i);
+        if ((kc.power_on >> f->bit & 1) && !kc_feature_ok(&kcm, f, &why)) {
+            kc.power_on &= ~(1u << f->bit);
+            kc_cleared++;
+        }
+    }
+}
+
+static void k_show_badge(void)
+{
+    char t[400];
+    snprintf(t, sizeof t, "%s%s\nPreview: Save writes these settings to the disk, but this kernel doesn't read them "
+             "yet (docs/KERNEL-CONFIG.md, steps 2–5).", kc_badge_text,
+             kc_cleared ? " Savings this computer lacks were switched off." : "");
+    gtk_label_set_text(GTK_LABEL(k_badge), t);
+}
+
+static int ask_admin(const char *why, char *name, char *pass);
+
+static void k_save_clicked(GtkButton *b, gpointer unused)
+{
+    (void)b, (void)unused;
+    char admin[FIELD_MAX + 1], apass[FIELD_MAX + 1];
+    if (!ask_admin("Settings wants to change how the kernel runs. Enter an administrator's name and password to "
+                   "allow this.", admin, apass))
+        return;
+    kc.power_seen = 0;
+    for (int i = 0; i < kc_nfeatures(); i++) {
+        const char *why;
+        if (kc_feature_ok(&kcm, kc_feature(i), &why))
+            kc.power_seen |= 1u << kc_feature(i)->bit;
+    }
+    char *text = kc_format(&kc), *reply;
+    char *req = g_strdup_printf("save\n%s\n%s\n%s", admin, apass, text);
+    explicit_bzero(apass, sizeof apass);
+    free(text);
+    gtk_widget_set_sensitive(k_save, FALSE);
+    int rc = k_helper(req, &reply);
+    explicit_bzero(req, strlen(req));
+    g_free(req);
+    reply[strcspn(reply, "\n")] = 0;
+    if (!rc && !strncmp(reply, "ok ", 3)) {
+        char which = '?';
+        unsigned gen = 0;
+        sscanf(reply + 3, "%c %u %63s", &which, &gen, kc_dev);
+        snprintf(kc_badge_text, sizeof kc_badge_text, "Saved: generation %u, copy %c of myos-config (%s).", gen,
+                 which, kc_dev);
+        kc_cleared = 0;
+        k_show_badge();
+        k_update_status();
+    } else {
+        k_update_status();
+        char t[400];
+        snprintf(t, sizeof t, "✕ Not saved: %s", reply);
+        gtk_label_set_text(GTK_LABEL(k_status), t);
+        k_mark(k_status, "error", 1);
+    }
+    g_free(reply);
+}
+
+static void k_revert_clicked(GtkButton *b, gpointer unused)
+{
+    (void)b, (void)unused;
+    show("kernel");
+}
+
+static void fit_window_to(int wpts, int hpts);
+
+static void page_kernel(GtkWidget *page)
+{
+    kc_detect(&kcm);
+    k_load_users();
+    k_load();
+    banner(page, IC_KERNEL, "Kernel", "How the processor's time is shared, and how hard the computer saves power.");
+    k_badge = label_new("", "footnote", .5);
+    gtk_label_set_justify(GTK_LABEL(k_badge), GTK_JUSTIFY_CENTER);
+    gtk_box_pack_start(GTK_BOX(page), k_badge, FALSE, FALSE, 0);
+    k_show_badge();
+
+    GtkWidget *mb = k_box(page, NULL, NULL);
+    k_rail = gtk_drawing_area_new();
+    gtk_widget_set_size_request(k_rail, -1, S(64));
+    gtk_widget_add_events(k_rail, GDK_BUTTON_PRESS_MASK);
+    g_signal_connect(k_rail, "draw", G_CALLBACK(k_draw_rail), NULL);
+    g_signal_connect(k_rail, "button-press-event", G_CALLBACK(k_rail_click), NULL);
+    gtk_box_pack_start(GTK_BOX(mb), k_rail, FALSE, FALSE, 0);
+    GtkWidget *names = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_box_set_homogeneous(GTK_BOX(names), TRUE);
+    for (int i = 0; i < 3; i++) {
+        k_mode_label[i] = label_new(k_mode_name[i], "kmode", i == 0 ? 0 : i == 1 ? .5 : 1);
+        if (i == kc.mode)
+            k_mark(k_mode_label[i], "kmode-on", 1);
+        gtk_box_pack_start(GTK_BOX(names), k_mode_label[i], TRUE, TRUE, 0);
+    }
+    gtk_box_pack_start(GTK_BOX(mb), names, FALSE, FALSE, 0);
+    k_mode_desc = label_new(k_mode_text[kc.mode], "blurb", 0);
+    gtk_box_pack_start(GTK_BOX(mb), k_mode_desc, FALSE, FALSE, 0);
+
+    k_body = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(14));
+    gtk_box_pack_start(GTK_BOX(page), k_body, FALSE, FALSE, 0);
+
+    GtkWidget *foot = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(8));
+    k_status = label_new("", NULL, 0);
+    gtk_box_pack_start(GTK_BOX(foot), k_status, TRUE, TRUE, 0);
+    GtkWidget *revert = gtk_button_new_with_label("Revert");
+    g_signal_connect(revert, "clicked", G_CALLBACK(k_revert_clicked), NULL);
+    k_save = gtk_button_new_with_label("Save…");
+    gtk_style_context_add_class(gtk_widget_get_style_context(k_save), "suggested-action");
+    g_signal_connect(k_save, "clicked", G_CALLBACK(k_save_clicked), NULL);
+    gtk_box_pack_end(GTK_BOX(foot), k_save, FALSE, FALSE, 0);
+    gtk_box_pack_end(GTK_BOX(foot), revert, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(page), foot, FALSE, FALSE, 0);
+
+    k_rebuild_body();
+    k_update_status();
+    fit_window_to(860, 720);            /* the wheel and its two columns of names */
+}
+
 struct page {
     const char *id, *title, *parent;
     void (*fill)(GtkWidget *page);
@@ -1593,6 +2560,8 @@ static const struct page pages[] = {
     {"wifi", "Wi-Fi", NULL, page_wifi, IC_WIFI, "wifi wi-fi wireless wlan airport hotspot"},
     {"network", "Network", NULL, page_network, IC_NETWORK, "ethernet internet ip address dns"},
     {"general", "General", NULL, page_general, IC_GENERAL, "about storage disk date time clock"},
+    {"kernel", "Kernel", NULL, page_kernel, IC_KERNEL,
+     "kernel realtime real-time slots time tasks power saving savings cpu processor speed idle battery"},
     {"displays", "Displays", NULL, page_displays, IC_DISPLAYS,
      "scale scaling size text bigger larger smaller resolution screen monitor hidpi retina"},
     {"wallpaper", "Wallpaper", NULL, page_wallpaper, IC_WALLPAPER,
@@ -1761,7 +2730,7 @@ static void build_sidebar(void)
        Displays; Users & Groups with the security panes; the input devices
        (Keyboard, Trackpad there) last. */
     static const char *const groups[][4] = {{"wifi", "network"},
-                                            {"general", "displays", "wallpaper"},
+                                            {"general", "kernel", "displays", "wallpaper"},
                                             {"usersgroups"},
                                             {"mouse"}};
     for (size_t gi = 0; gi < sizeof groups / sizeof groups[0]; gi++) {
@@ -1792,16 +2761,21 @@ static void relayout(void)
 
 /* The window's size at this scale, but never more than the screen holds
    (200% on a 1920x1200 screen leaves 960x600 to work in), and on screen. */
-static void fit_window(void)
+static void fit_window_to(int wpts, int hpts)
 {
     int wsf = effective() >= 200 ? 2 : 1;
     int maxw = screen_w * 94 / 100 / wsf, maxh = screen_h * 86 / 100 / wsf;
-    int w = S(780) < maxw ? S(780) : maxw, h = S(560) < maxh ? S(560) : maxh;
+    int w = S(wpts) < maxw ? S(wpts) : maxw, h = S(hpts) < maxh ? S(hpts) : maxh;
     int x, y;
     gtk_window_resize(GTK_WINDOW(window), w, h);
     gtk_window_get_position(GTK_WINDOW(window), &x, &y);
     if (x + w > screen_w / wsf || y + h > screen_h * 92 / 100 / wsf)
         gtk_window_move(GTK_WINDOW(window), (screen_w / wsf - w) / 2, (screen_h * 92 / 100 / wsf - h) / 2);
+}
+
+static void fit_window(void)
+{
+    fit_window_to(780, 560);
 }
 
 static void set_scale(int pct)

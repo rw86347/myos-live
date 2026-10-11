@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Visual Studio Code
+Comment=Edit code and projects
+Exec=code %F
+Icon=text-editor
+Terminal=false
+Categories=Development;
+MimeType=text/plain;

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # The live disk's user, "myos", is already in /etc/passwd (tools/fetch-live.py
 # writes it at build time: useradd can't lock /etc/group on MyOS yet).
 #

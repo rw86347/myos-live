@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # myos-office — opens word-processor documents (.docx, .doc, .odt, .rtf,
 # .abw) for the desktop and My Files. LibreOffice on the 64-bit disk: it
 # reads and writes Word files properly. AbiWord where LibreOffice isn't

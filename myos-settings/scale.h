@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * scale.h — the desktop's scale and pointer size settings, shared by
  * myos-xsettings (which applies them) and myos-settings (where people

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # The graphical login screen: myos-login starts the X server, shows the
 # Golden Hour login, and runs /etc/myos/xsession as whoever logs in. When
 # the session ends it exits and runit starts it again, with a fresh server.

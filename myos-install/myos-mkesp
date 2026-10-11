@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
+"""myos-mkesp DEVICE SOURCE — make DEVICE a FAT32 EFI System Partition
+holding every file under SOURCE (the live stick's ESP, mounted read-only).
+
+The installer's boot step. MyOS's own FAT driver only reads, and the live
+disk has no mkfs.vfat or mtools, so this writes the file system itself,
+straight onto the partition: boot sector and FSInfo (and their backups at
+sector 6), two FATs, then each directory and file as a cluster chain. Names
+that aren't plain 8.3 (INITRD.CPIO) get VFAT long-name entries, as Windows
+and every UEFI firmware read them.
+
+Only what an ESP needs: no fragmentation, no free-space search — files are
+laid down one after another. Checked against mtools (tools/test-mkesp.sh).
+"""
+import os
+import struct
+import sys
+import time
+
+SECTOR = 512
+RESERVED = 32               # sectors before the first FAT (FAT32's usual)
+NFATS = 2
+EOC = 0x0FFFFFFF            # end of a cluster chain
+ATTR_DIR, ATTR_ARCHIVE, ATTR_LFN = 0x10, 0x20, 0x0F
+
+
+def fail(msg):
+    sys.exit("myos-mkesp: " + msg)
+
+
+def device_sectors(fd):
+    size = os.lseek(fd, 0, os.SEEK_END)     # a disk file's size (MyOS and Linux)
+    os.lseek(fd, 0, os.SEEK_SET)
+    return size // SECTOR
+
+
+def geometry(total):
+    """Sectors per cluster and FAT size: at least 65525 clusters (below
+    that it isn't FAT32) with room to spare, 4 KiB clusters when possible."""
+    for spc in (8, 4, 2, 1):
+        fatsz = 1
+        for _ in range(8):                  # FAT size and cluster count settle quickly
+            clusters = (total - RESERVED - NFATS * fatsz) // spc
+            fatsz = ((clusters + 2) * 4 + SECTOR - 1) // SECTOR
+        clusters = (total - RESERVED - NFATS * fatsz) // spc
+        if clusters >= 66000:
+            return spc, fatsz, clusters
+    fail("the partition is too small for FAT32 (at least 33 MiB)")
+
+
+def short_name(name, used):
+    """The 8.3 name for `name`, and whether it needs long-name entries."""
+    base, dot, ext = name.rpartition(".")
+    if not dot:
+        base, ext = name, ""
+    ok = lambda s, n: 0 < len(s) <= n and all(c.isalnum() or c in "_-~!#$%&'()@^`{}" for c in s)
+    if ok(base, 8) and (not ext or ok(ext, 3)) and name == name.upper():
+        sn = base.ljust(8) + ext.ljust(3)
+        return sn.encode("ascii"), False
+    clean = lambda s: "".join(c for c in s.upper() if c.isalnum() or c in "_-")
+    b, e = clean(base)[:6] or "FILE", clean(ext)[:3]
+    for n in range(1, 100):
+        sn = (b + "~" + str(n)).ljust(8)[:8] + e.ljust(3)
+        if sn not in used:
+            used.add(sn)
+            return sn.encode("ascii"), True
+    fail("too many similar names in one folder")
+
+
+def lfn_entries(name, sn):
+    """VFAT long-name entries for `name`, last piece first, as they sit
+    on the disk in front of the 8.3 entry."""
+    csum = 0
+    for b in sn:
+        csum = (((csum & 1) << 7) + (csum >> 1) + b) & 0xFF
+    units = list(name.encode("utf-16-le"))
+    chars = [units[i] | units[i + 1] << 8 for i in range(0, len(units), 2)]
+    pieces = [chars[i:i + 13] for i in range(0, len(chars), 13)]
+    out = []
+    for i, piece in enumerate(pieces):
+        piece = piece + ([0x0000] if len(piece) < 13 else [])
+        piece = piece + [0xFFFF] * (13 - len(piece))
+        seq = i + 1 | (0x40 if i == len(pieces) - 1 else 0)
+        e = bytearray(32)
+        e[0] = seq
+        struct.pack_into("<5H", e, 1, *piece[0:5])
+        e[11], e[12], e[13] = ATTR_LFN, 0, csum
+        struct.pack_into("<6H", e, 14, *piece[5:11])
+        struct.pack_into("<2H", e, 28, *piece[11:13])
+        out.append(bytes(e))
+    return list(reversed(out))
+
+
+def dos_time(t):
+    lt = time.localtime(t)
+    d = (max(lt.tm_year, 1980) - 1980) << 9 | lt.tm_mon << 5 | lt.tm_mday
+    tm = lt.tm_hour << 11 | lt.tm_min << 5 | lt.tm_sec // 2
+    return d, tm
+
+
+def entry(sn, attr, cluster, size, t):
+    d, tm = dos_time(t)
+    e = bytearray(32)
+    e[0:11] = sn
+    e[11] = attr
+    struct.pack_into("<HHHHHHHI", e, 14, tm, d, d, cluster >> 16, tm, d, cluster & 0xFFFF, size)
+    return bytes(e)
+
+
+class Fat32:
+    def __init__(self, fd, total):
+        self.fd, self.total = fd, total
+        self.spc, self.fatsz, self.clusters = geometry(total)
+        self.csize = self.spc * SECTOR
+        self.data = RESERVED + NFATS * self.fatsz
+        self.fat = [0x0FFFFFF8, EOC] + [0] * self.clusters
+        self.next = 2
+
+    def alloc(self, nbytes):
+        """A chain of clusters for nbytes (at least one), laid end to end."""
+        n = max(1, (nbytes + self.csize - 1) // self.csize)
+        if self.next + n > self.clusters + 2:
+            fail("the files don't fit in the partition")
+        first = self.next
+        for c in range(first, first + n):
+            self.fat[c] = c + 1
+        self.fat[first + n - 1] = EOC
+        self.next += n
+        return first
+
+    def offset(self, cluster):
+        return (self.data + (cluster - 2) * self.spc) * SECTOR
+
+    def write_chain(self, first, data):
+        os.pwrite(self.fd, data, self.offset(first))    # contiguous: one write
+
+    def copy_file(self, first, path):
+        """A file's bytes into its (contiguous) chain, 4 MiB at a time:
+        INITRD.CPIO is a quarter of a gigabyte."""
+        off = self.offset(first)
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(4 << 20)
+                if not chunk:
+                    break
+                os.pwrite(self.fd, chunk, off)
+                off += len(chunk)
+
+    def add_tree(self, src, cluster, parent_cluster):
+        """Write folder `src` as the directory at `cluster`."""
+        names = sorted(os.listdir(src))
+        used, ents = set(), []
+        if parent_cluster is not None:      # "." and ".."
+            now = time.time()
+            ents.append(entry(b".          ", ATTR_DIR, cluster, 0, now))
+            ents.append(entry(b"..         ", ATTR_DIR, parent_cluster, 0, now))
+        later = []
+        for name in names:
+            path = os.path.join(src, name)
+            st = os.stat(path)
+            sn, long_ = short_name(name, used)
+            if long_:
+                ents.extend(lfn_entries(name, sn))
+            if os.path.isdir(path):
+                sub = self.alloc(self.dir_bytes(path))
+                ents.append(entry(sn, ATTR_DIR, sub, 0, st.st_mtime))
+                later.append((path, sub))
+            else:
+                first = self.alloc(st.st_size) if st.st_size else 0
+                if st.st_size:
+                    self.copy_file(first, path)
+                ents.append(entry(sn, ATTR_ARCHIVE, first, st.st_size, st.st_mtime))
+        blob = b"".join(ents)
+        size = self.chain_bytes(cluster)
+        if len(blob) > size:
+            fail("folder %s is too big" % src)
+        self.write_chain(cluster, blob + bytes(size - len(blob)))
+        for path, sub in later:
+            self.add_tree(path, sub, cluster if parent_cluster is not None else 0)
+
+    def dir_bytes(self, path):
+        """Room for a folder's entries (each name may need long-name entries)."""
+        n = 2 + sum(1 + (len(x) + 12) // 13 + 1 for x in os.listdir(path))
+        return n * 32
+
+    def chain_bytes(self, first):
+        n, c = 0, first
+        while True:
+            n += 1
+            if self.fat[c] == EOC:
+                return n * self.csize
+            c = self.fat[c]
+
+    def finish(self, label):
+        free = self.clusters - (self.next - 2)
+        boot = bytearray(SECTOR)
+        boot[0:3] = b"\xEB\x58\x90"
+        boot[3:11] = b"MYOS    "
+        struct.pack_into("<HBHBHHBHHHII", boot, 11, SECTOR, self.spc, RESERVED, NFATS, 0, 0,
+                         0xF8, 0, 63, 255, 0, self.total)
+        struct.pack_into("<IHHIHH", boot, 36, self.fatsz, 0, 0, 2, 1, 6)
+        boot[64], boot[66] = 0x80, 0x29
+        struct.pack_into("<I", boot, 67, int(time.time()) & 0xFFFFFFFF)
+        boot[71:82] = label.upper().encode("ascii")[:11].ljust(11)
+        boot[82:90] = b"FAT32   "
+        boot[510:512] = b"\x55\xAA"
+        info = bytearray(SECTOR)
+        struct.pack_into("<I", info, 0, 0x41615252)
+        struct.pack_into("<III", info, 484, 0x61417272, free, self.next)
+        struct.pack_into("<I", info, 508, 0xAA550000)
+        fat = struct.pack("<%dI" % len(self.fat), *self.fat)
+        fat += bytes(self.fatsz * SECTOR - len(fat))
+        os.pwrite(self.fd, bytes(RESERVED * SECTOR), 0)
+        for at in (0, 6):                   # the boot sector and FSInfo, and their backups
+            os.pwrite(self.fd, bytes(boot), at * SECTOR)
+            os.pwrite(self.fd, bytes(info), (at + 1) * SECTOR)
+        for i in range(NFATS):
+            os.pwrite(self.fd, fat, (RESERVED + i * self.fatsz) * SECTOR)
+        os.fsync(self.fd)
+
+
+def main():
+    if len(sys.argv) != 3 or not os.path.isdir(sys.argv[2]):
+        sys.exit("usage: myos-mkesp DEVICE SOURCE-FOLDER")
+    fd = os.open(sys.argv[1], os.O_RDWR)
+    total = device_sectors(fd)
+    fs = Fat32(fd, total)
+    root = fs.alloc(fs.dir_bytes(sys.argv[2]))
+    fs.add_tree(sys.argv[2], root, None)
+    fs.finish("EFI")
+    os.close(fd)
+    print("myos-mkesp: %s: FAT32, %d MiB, %d KiB clusters, %d used"
+          % (sys.argv[1], total // 2048, fs.spc // 2, fs.next - 2))
+
+
+if __name__ == "__main__":
+    main()

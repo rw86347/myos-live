@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * marks.c — markup: Preview's shapes, text boxes, notes, sketches and
  * signatures, and the text highlights.

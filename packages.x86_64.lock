@@ -1,7 +1,7 @@
 # packages.lock — written by tools/fetch-live.py --update; do not edit.
 # Every package on the live disk, in install order, with the SHA-256 of
 # its .apk. The build refuses any download that doesn't match.
-world f2c218847de5bf82d92ee824bdf5e8f4efe7b74e41c1c806abe0c82998bf2ee7
+world fe9135362b8a03bdcfc3176934c067adf77f7fd8e2715258df7776f8bce26b21
 # group      package                          version              repo       sha256
 base         alpine-baselayout-data           3.6.5-r0             main       a3da0d6c15fadda2ffd0dcb622c4b86cc21076114fce959acb2ea4ea2a0361a1
 base         musl                             1.2.5-r3             main       70705bdeb1a8d54ee1ec7ce3b06f176206f4f3b105d86cf5576d74b8277adfa0
@@ -574,6 +574,9 @@ dev          openjdk17-jre                    17.0.16_p8-r0        community  aa
 dev          openjdk17-jmods                  17.0.16_p8-r0        community  5410677bcd4f25e187fb9a78e9495d6f5655c4199e582731cf305a2924c4601d
 dev          openjdk17-jdk                    17.0.16_p8-r0        community  63e46a02cfdc36add14c26bfbb8b1028c64088a0ec316a2adbbeedef55a06054
 dev          ripgrep                          14.1.0-r0            community  c132da03ab05e52a13f465a8b3556e6ee3126cb770d9b140349bfe3e5751bed4
+dev          musl-obstack                     1.2.3-r2             main       c2ff39575494256c2c409e9660dec60d4b9f1a45c1fbae782072fa7f63806771
+dev          libucontext                      1.2-r3               main       cf032d3badec0524354471e5b3e120f81da9ee8f61c97fa2050fbc15267ee826
+dev          gcompat                          1.1.0-r4             main       ba2a8af0108cd5717f79fb2e01943b249b66798ae0c54896180a06a7e13330ee
 docs         mandoc                           1.14.6-r13           main       6d9b1356489132e6ccf0aa77edd890424a9efdaea389dc10ed6adf6afba723f7
 docs         mandoc-doc                       1.14.6-r13           main       472127422f1978d14be223cd1471fc9f07936cd508e77e901b972a232bb43bd7
 docs         man-pages                        6.8-r0               main       df9f0ee0302f55f747a11d19f18fb1729e724ee2dcba2ff592d5e8ce45951127
@@ -663,6 +666,7 @@ dev          py3-pip-bash-completion          24.0-r2              community  e3
 office       python3-pycache-pyc0             3.12.13-r0           main       c662e43c95c1cd769f6c0e33a3f9bda348c9bc1f8d6c132ad9761d332e129bb8
 office       pyc                              3.12.13-r0           main       10659c3425987f5cddba32940221085afa9edc668ff837f2e7cdcf0c67f604b2
 office       python3-pyc                      3.12.13-r0           main       9a1b7a6d82d5d826665e80e5173a74a825e8464ba26629da8a9c57f53da832ae
+dev          ripgrep-bash-completion          14.1.0-r0            community  ea283e97b3335b62f217fe645edb18dd7f5568bc4de7d2b002b2566a2d2be1a6
 base         libcap-ng                        0.8.5-r0             main       b1c58942c1a25bedad42e059de15f3c32cc3839ce549f9e255cae7a77333b082
 base         setpriv                          2.40.1-r1            main       ca83dd57f032753a0809bb6e33952b9fe6ce95a145855f535e328a4259537e04
 base         sfdisk                           2.40.1-r1            main       d9c2e80fe5953972d9fbcac7725742a7c6c738497f1b5b14cfa8696980f576f0

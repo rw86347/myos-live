@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * myos-trash — the Recycle Bin on the desktop: the first place in the
  * left column, a wire wastebasket (empty, or with paper in it while

@@ -1,3 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # poweroff (and halt): through runit (see /sbin/shutdown).
 exec /sbin/runit-init 0

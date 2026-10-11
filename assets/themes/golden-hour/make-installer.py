@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 """make-installer.py — mockups of the installer (docs/INSTALLER-PLAN.md).
 
 Draws installWizard01..09 in the Golden Hour theme with make-theme.py's own
@@ -138,14 +140,17 @@ def list_rows(x, y, w, rows, selected, h=26):
 
 
 def disk_bar(x, y, w, parts, h=34):
-    """A disk drawn as a bar of partitions: (fraction, color, label, sublabel)."""
+    """A disk drawn as a bar of partitions: (fraction, color, label, sublabel).
+
+    color may be \"HATCH\" for diagonally striped unallocated space."""
     o = ['<rect x="%s" y="%s" width="%s" height="%s" rx="6" fill="#ffffff" stroke="%s"/>'
          % (x, y, w, h, C["border"])]
     cx = x
     for frac, color, label, sub in parts:
         pw = w * frac
+        fill = "url(#stripe)" if color == "HATCH" else color
         o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="%s" stroke="#ffffff" stroke-width="1.5"/>'
-                 % (cx + 1, y + 1, max(pw - 2, 2), h - 2, color))
+                 % (cx + 1, y + 1, max(pw - 2, 2), h - 2, fill))
         if pw > 60:
             o.append(text(cx + pw / 2, y + 15, label, 11, "#ffffff", "bold", anchor="middle"))
             o.append(text(cx + pw / 2, y + 28, sub, 10, "#ffffff", anchor="middle", extra='opacity="0.9"'))
@@ -155,9 +160,46 @@ def disk_bar(x, y, w, parts, h=34):
     return "".join(o)
 
 
-def page(step, body):
+def partition_table(x, y, w, headers, rows, selected):
+    """Five-column table for the partition manager mockup."""
+    col_w = [110, 72, 58, 52, 72]
+    o = [card(x, y, w, 22 + len(rows) * 24 + 8)]
+    cx = x + 10
+    for head, cw in zip(headers, col_w):
+        o.append(text(cx + cw / 2, y + 16, head, 10, C["text_soft"], "bold", anchor="middle"))
+        cx += cw
+    hl = S("Menu highlight", "hover")
+    for r, row in enumerate(rows):
+        yy = y + 22 + r * 24
+        if r == selected:
+            o.append(draw_bar(hl, x + 4, yy, w - 8, 24))
+        color = hl["text"] if r == selected else C["text"]
+        cx = x + 10
+        for c, (cell, cw) in enumerate(zip(row, col_w)):
+            soft = c > 0 and r != selected
+            o.append(text(cx + (6 if c == 0 else cw / 2), yy + 16, cell, 11,
+                          color if not soft else C["text_soft"],
+                          "bold" if c == 0 and r == selected else "normal",
+                          anchor="start" if c == 0 else "middle"))
+            cx += cw
+    return "".join(o)
+
+
+def tool_btn(x, y, icon, label, enabled=True):
+    st = S("Push button", "normal")
+    o = [draw_bar(st, x, y, 76, 52)]
+    o.append(img(icon, x + 26, y + 6, 22))
+    o.append(text(x + 38, y + 44, label, 9, C["text"] if enabled else C["text_soft"],
+                  anchor="middle"))
+    return "".join(o)
+
+
+def page(step, body, win_title="Install MyOS"):
     o = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d"><defs>%s'
          '<filter id="blur" x="-5%%" y="-5%%" width="110%%" height="110%%"><feGaussianBlur stdDeviation="6"/></filter>'
+         '<pattern id="stripe" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">'
+         '<rect width="8" height="8" fill="#e4dfd6"/>'
+         '<line x1="0" y1="0" x2="0" y2="8" stroke="#ffffff" stroke-width="3"/></pattern>'
          '<linearGradient id="sand" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="%s"/>'
          '<stop offset="1" stop-color="%s"/></linearGradient>'
          '<linearGradient id="prog" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="%s"/>'
@@ -166,7 +208,7 @@ def page(step, body):
          % (W, H, W, H, T.COMMON_DEFS, C["panel_sand"], C["panel_sand_deep"],
             C["green_1"], C["green_2"], C["green_3"], C["green_4"])]
     o.append(backdrop())
-    o.append(window(WX, WY, WW, WH, "Install MyOS", "disks", "active"))
+    o.append(window(WX, WY, WW, WH, win_title, "disks", "active"))
     o.append(side(step))
     o.append(body)
     o.append("</svg>\n")
@@ -254,25 +296,46 @@ def p4():
 
 
 def p5():
-    o = [heading("disks", "Partitions", "What MyOS will make in the free space. Nothing is written yet.")]
-    y = PY + 66
-    o.append(text(PX, y, "Before", 12, C["text_soft"]))
-    o.append(disk_bar(PX, y + 8, PW, [(0.034, "#7d9bb8", "", ""), (0.76, "#1f6fd1", "Windows (C:)", "390 GB"),
-                                       (0.19, "#c9c2b2", "Free", "98 GB"), (0.016, "#5b6573", "", "")]))
-    o.append(text(PX, y + 66, "After", 12, C["text_soft"]))
-    o.append(disk_bar(PX, y + 74, PW, [(0.034, "#7d9bb8", "", ""), (0.76, "#1f6fd1", "Windows (C:)", "390 GB"),
-                                        (0.06, C["title_mid"], "root", "32 GB"), (0.13, C["green_3"], "myos-data", "66 GB"),
-                                        (0.016, "#5b6573", "", "")]))
-    rows = [[("EFI system partition", 210), ("260 MB", 80), ("kept; MyOS adds EFI/MYOS", 200)],
-            [("Windows (C:)", 210), ("390 GB", 80), ("not touched", 200)],
-            [("myos-root  (ext2, /)", 210), ("32 GB", 80), ("new: the system", 200)],
-            [("myos-data  (ext2, /home)", 210), ("66 GB", 80), ("new: your files", 200)]]
-    o.append(list_rows(PX, y + 132, PW, rows, 2, 28))
-    yy = y + 132 + 4 * 28 + 24
-    o.append(field(PX, yy, 330, "System size:", "32 GB"))
-    o.append(check(PX, yy + 40, True, "Keep my files on a separate partition (myos-data)"))
-    o.append(check(PX, yy + 64, False, "Encrypt the data partition (later: not available yet)"))
-    return page(4, "".join(o) + buttons(extra="Edit partitions..."))
+    o = [heading("disks", "Disk & partitions",
+                 "Samsung SSD 980 1TB (NVMe). Drag the bar or use the table — nothing is written yet.")]
+    y = PY + 58
+    tw = PW - 88                         # room for the action column on the right
+    tx = PX + PW - 80
+    o.append(text(PX, y, "Before", 11, C["text_soft"]))
+    o.append(disk_bar(PX, y + 14, tw, [
+        (0.026, C["steel_2"], "EFI", "260 MB"),
+        (0.72, "#1f6fd1", "Windows (C:)", "390 GB"),
+        (0.24, "HATCH", "Unallocated", "98 GB"),
+        (0.014, "#5b6573", "", ""),
+    ], h=26))
+    o.append(text(PX, y + 52, "After", 11, C["text_soft"]))
+    o.append(disk_bar(PX, y + 66, tw, [
+        (0.026, C["steel_2"], "EFI", "260 MB"),
+        (0.72, "#1f6fd1", "Windows (C:)", "390 GB"),
+        (0.032, C["title_mid"], "myos-root", "32 GB"),
+        (0.13, C["green_3"], "myos-data", "66 GB"),
+        (0.072, "HATCH", "", ""),
+        (0.014, "#5b6573", "", ""),
+    ], h=30))
+    ty = y + 108
+    headers = ["Partition", "Type", "Size", "Mount", "Action"]
+    rows = [
+        ["EFI System", "EFI", "260 MB", "—", "Keep"],
+        ["Windows (C:)", "NTFS", "390 GB", "—", "Keep"],
+        ["myos-root", "ext2", "32 GB", "/", "New"],
+        ["myos-data", "ext2", "66 GB", "/home", "New"],
+    ]
+    o.append(partition_table(PX, ty, tw, headers, rows, 2))
+    o.append(tool_btn(tx, ty, "disks", "Add"))
+    o.append(tool_btn(tx, ty + 58, "my-files", "Resize"))
+    o.append(tool_btn(tx, ty + 116, "recycle", "Delete", enabled=False))
+    o.append(tool_btn(tx, ty + 174, "settings", "Format", enabled=False))
+    by = ty + 22 + len(rows) * 24 + 20
+    o.append(card(PX, by, PW, 38, "#fff4dc", 1, C["gold"]))
+    o.append(img("help", PX + 10, by + 6, 26))
+    o.append(text(PX + 44, by + 24, "Nothing is written until you click Install on the Summary page.", 11,
+                  weight="bold"))
+    return page(4, "".join(o) + buttons(), win_title="Install MyOS — Disk & partitions")
 
 
 def p6():

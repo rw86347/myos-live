@@ -1,6 +1,9 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 #include "plan.h"
 
 #include <ctype.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,12 +19,13 @@ void plan_init(struct install_plan *p)
     strcpy(p->keyboard_name, "English (US)");
     strcpy(p->timezone, "Asia/Shanghai");
     p->ntp = 1;
+    p->cjk = 1;                         /* Chinese fonts: always, never asked (Rodger, 2026-10-09) */
     p->root_gb = DEFAULT_ROOT_GB;
     p->separate_home = 1;
     p->ask_password = 1;
     strcpy(p->compositor, "xrender");
     p->firmware = FW_UEFI;
-    p->keep_esp = 1;
+    p->keep_esp = 0;                    /* only free-space installs keep one */
 }
 
 const char *plan_mode_name(int mode)
@@ -70,6 +74,9 @@ int plan_good_zone(const char *s)
     return 1;
 }
 
+/* A host name (RFC 1123): ASCII letters of either case, digits and -.
+   Names are case-insensitive, and Linux keeps them as typed, so "MSI" is
+   fine (it was refused once for being capitals, 2026-10-09). */
 int plan_good_hostname(const char *s)
 {
     size_t n = strlen(s);
@@ -77,7 +84,7 @@ int plan_good_hostname(const char *s)
         return 0;
     for (size_t i = 0; i < n; i++) {
         unsigned char c = (unsigned char)s[i];
-        if (!(islower(c) || isdigit(c) || c == '-'))
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || isdigit(c) || c == '-'))
             return 0;
     }
     return s[0] != '-' && s[n - 1] != '-';
@@ -142,9 +149,18 @@ int plan_write(const char *path, const struct install_plan *p)
 {
     char tmp[PLAN_PATH + 8];
     snprintf(tmp, sizeof tmp, "%s+", path);
-    FILE *f = fopen(tmp, "w");
-    if (!f)
+    /* The plan holds the new password, and /tmp is everyone's: the file is
+       private from the moment it exists (not chmod-ed afterwards), and a
+       name someone else made first -- perhaps a link to a file of theirs --
+       is refused rather than followed or written through. */
+    unlink(tmp);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    FILE *f = fd >= 0 ? fdopen(fd, "w") : NULL;
+    if (!f) {
+        if (fd >= 0)
+            close(fd);
         return -1;
+    }
     fprintf(f, "# myos-install plan v%d\n", PLAN_VERSION);
     fprintf(f, "lang=%s\n", p->lang);
     fprintf(f, "lang_name=%s\n", p->lang_name);
@@ -174,7 +190,7 @@ int plan_write(const char *path, const struct install_plan *p)
     fprintf(f, "compositor=%s\n", p->compositor);
     fprintf(f, "compositor_ms=%.2f\n", p->compositor_ms);
     fprintf(f, "firmware=%s\n", plan_firmware_name(p->firmware));
-    if (fclose(f) || chmod(tmp, 0600) || rename(tmp, path)) {
+    if (fclose(f) || rename(tmp, path)) {
         unlink(tmp);
         return -1;
     }
@@ -184,11 +200,23 @@ int plan_write(const char *path, const struct install_plan *p)
 int plan_read(const char *path, struct install_plan *p)
 {
     FILE *f = fopen(path, "r");
-    char line[PLAN_LINE];
 
     plan_init(p);
     if (!f)
         return -1;
+    int rc = plan_read_file(f, p);
+    fclose(f);
+    return rc;
+}
+
+/* The helper opens and checks the file itself (owner, mode, not a link),
+   then reads that same open file: reading it again by name could read
+   another file put there in between. */
+int plan_read_file(FILE *f, struct install_plan *p)
+{
+    char line[PLAN_LINE];
+
+    plan_init(p);
     while (fgets(line, sizeof line, f)) {
         char *nl = strchr(line, '\n');
         if (nl)
@@ -204,7 +232,7 @@ int plan_read(const char *path, struct install_plan *p)
         else if (!strcmp(line, "lang_name"))
             set_str(p->lang_name, sizeof p->lang_name, eq);
         else if (!strcmp(line, "cjk"))
-            p->cjk = atoi(eq);
+            p->cjk = 1;                 /* an old plan's "no" doesn't count: always */
         else if (!strcmp(line, "keyboard"))
             set_str(p->keyboard, sizeof p->keyboard, eq);
         else if (!strcmp(line, "keyboard_name"))
@@ -256,14 +284,31 @@ int plan_read(const char *path, struct install_plan *p)
         else if (!strcmp(line, "firmware"))
             p->firmware = !strcmp(eq, "bios") ? FW_BIOS : FW_UEFI;
     }
-    fclose(f);
+    explicit_bzero(line, sizeof line);  /* the password line was here */
     return 0;
+}
+
+/* A language or keyboard name: these go into a shell script that every
+   login runs (/etc/profile.d/lang.sh) and into Xorg's settings, so nothing
+   that could end a quote or start a command. en_US.UTF-8, us, de(nodeadkeys). */
+static int good_word(const char *s)
+{
+    if (!*s)
+        return 0;
+    for (; *s; s++)
+        if (!isalnum((unsigned char)*s) && !strchr("_.-@()+", *s))
+            return 0;
+    return 1;
 }
 
 int plan_check(const struct install_plan *p, char *err, size_t errlen)
 {
     if (!p->lang[0] || !p->keyboard[0] || !p->timezone[0]) {
         snprintf(err, errlen, "Language, keyboard and time zone are required.");
+        return -1;
+    }
+    if (!good_word(p->lang) || !good_word(p->keyboard)) {
+        snprintf(err, errlen, "The language or keyboard name has characters it can't have.");
         return -1;
     }
     if (!plan_good_zone(p->timezone)) {
@@ -334,7 +379,7 @@ void plan_describe(const struct install_plan *p, char *out, size_t n)
              "Won't touch\t%s\n"
              "Desktop effects\t%s%.1f ms to redraw the screen)\n",
              p->lang_name[0] ? p->lang_name : p->lang,
-             p->cjk ? ", with Chinese fonts and pinyin" : "",
+             p->cjk ? ", with Chinese fonts" : "",
              p->keyboard_name[0] ? p->keyboard_name : p->keyboard,
              p->timezone, p->ntp ? "from the network" : "not from the network",
              p->hwclock_local ? "; hardware clock in local time (Windows)" : "",
@@ -346,10 +391,9 @@ void plan_describe(const struct install_plan *p, char *out, size_t n)
              p->separate_home && data ? data_sz : "",
              p->separate_home ? " (ext2, /home)" : "",
              p->firmware == FW_UEFI
-                 ? (p->keep_esp ? "EFI/MYOS on the EFI partition, and a MyOS startup entry"
-                                : "a new EFI partition with EFI/MYOS")
+                 ? "a new EFI partition with MyOS's start files (EFI/BOOT, EFI/MYOS)"
                  : "the BIOS boot area (MBR + stage 2, as make hd does)",
-             p->mode == MODE_ERASE ? "nothing: the whole disk is erased"
+             p->mode == MODE_ERASE ? "nothing: everything on the disk is erased"
                                    : (p->free_bytes ? "existing partitions; only the free space is used"
                                                     : "existing partitions (free space unknown)"),
              !strcmp(p->compositor, "gl") ? "Full (measured: "

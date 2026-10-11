@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * xpic.h — pictures in memory, to and from the X server. Shared by
  * myos-login and myos-menu.

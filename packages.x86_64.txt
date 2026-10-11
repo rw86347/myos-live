@@ -36,6 +36,9 @@ openjdk17-jdk
 # Claude Code's own search tool is a glibc binary. Alpine's ripgrep is the
 # one it is told to use (USE_BUILTIN_RIPGREP=0).
 ripgrep
+# VS Code (tools/fetch-live.py add_vscode): Microsoft's linux-x64 tarball is
+# glibc; gcompat lets it run on musl. There is no code apk on Alpine 3.20.
+gcompat
 
 [wifi]
 # Wi-Fi (docs/WIFI-PLAN.md W5): wpa_supplicant joins networks (WPA2, the

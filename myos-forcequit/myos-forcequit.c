@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * myos-forcequit — Force Quit, as on the Mac: the programs that have
  * windows, and a button that ends the chosen one at once (kill -9).

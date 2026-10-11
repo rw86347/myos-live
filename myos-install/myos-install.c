@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * myos-install — the nine-page installer (docs/INSTALLER-PLAN.md).
  *
@@ -36,19 +38,18 @@
 
 struct lang_opt {
     const char *id, *native, *english, *keyboard, *kb_name, *tz;
-    int cjk;
 };
 
 static const struct lang_opt LANGS[] = {
-    { "en_US.UTF-8", "English (United States)", "English", "us", "English (US)", "America/New_York", 0 },
-    { "en_GB.UTF-8", "English (United Kingdom)", "English", "gb", "English (UK)", "Europe/London", 0 },
-    { "zh_CN.UTF-8", "中文 (简体)", "Chinese, Simplified", "cn", "Chinese", "Asia/Shanghai", 1 },
-    { "zh_TW.UTF-8", "中文 (繁體)", "Chinese, Traditional", "cn", "Chinese", "Asia/Taipei", 1 },
-    { "de_DE.UTF-8", "Deutsch", "German", "de", "German", "Europe/Berlin", 0 },
-    { "es_ES.UTF-8", "Español", "Spanish", "es", "Spanish", "Europe/Madrid", 0 },
-    { "fr_FR.UTF-8", "Français", "French", "fr", "French", "Europe/Paris", 0 },
-    { "ja_JP.UTF-8", "日本語", "Japanese", "us", "English (US)", "Asia/Tokyo", 1 },
-    { "pt_BR.UTF-8", "Português (Brasil)", "Portuguese", "us", "English (US)", "America/Sao_Paulo", 0 },
+    { "en_US.UTF-8", "English (United States)", "English", "us", "English (US)", "America/New_York" },
+    { "en_GB.UTF-8", "English (United Kingdom)", "English", "gb", "English (UK)", "Europe/London" },
+    { "zh_CN.UTF-8", "中文 (简体)", "Chinese, Simplified", "cn", "Chinese", "Asia/Shanghai" },
+    { "zh_TW.UTF-8", "中文 (繁體)", "Chinese, Traditional", "cn", "Chinese", "Asia/Taipei" },
+    { "de_DE.UTF-8", "Deutsch", "German", "de", "German", "Europe/Berlin" },
+    { "es_ES.UTF-8", "Español", "Spanish", "es", "Spanish", "Europe/Madrid" },
+    { "fr_FR.UTF-8", "Français", "French", "fr", "French", "Europe/Paris" },
+    { "ja_JP.UTF-8", "日本語", "Japanese", "us", "English (US)", "Asia/Tokyo" },
+    { "pt_BR.UTF-8", "Português (Brasil)", "Portuguese", "us", "English (US)", "America/Sao_Paulo" },
 };
 
 struct kb_opt { const char *id, *name; };
@@ -90,17 +91,18 @@ static const char *STEPS[] = {
     "Your account", "Summary", "Install", "Done"
 };
 
+/* In the order the helper does them (myos-install-helper.c). */
 static const char *WORK[] = {
     "Making partitions",
     "Making file systems",
+    "Making the disk start MyOS",
     "Copying the system",
     "Setting up your account and language",
-    "Making the disk start MyOS",
     "Cleaning up"
 };
 
 static const char *WORK_KEY[] = {
-    "partition", "filesystems", "copy", "configure", "boot", "finish"
+    "partition", "filesystems", "boot", "copy", "configure", "finish"
 };
 
 /* --- time zones ----------------------------------------------------------- */
@@ -362,13 +364,10 @@ static int text_install(struct install_plan *p, const char *plan_path)
     lang = pick("Number", (int)(sizeof LANGS / sizeof *LANGS), 0);
     strcpy(p->lang, LANGS[lang].id);
     strcpy(p->lang_name, LANGS[lang].native);
-    p->cjk = LANGS[lang].cjk;
     strcpy(p->keyboard, LANGS[lang].keyboard);
     strcpy(p->keyboard_name, LANGS[lang].kb_name);
     strcpy(p->timezone, LANGS[lang].tz);
 
-    if (read_line("Also install fonts and input for Chinese? [Y/n] ", buf, sizeof buf, 0) == 0)
-        p->cjk = !(buf[0] == 'n' || buf[0] == 'N');
 
     printf("\nKeyboard:\n");
     for (i = 0; i < (int)(sizeof KBS / sizeof *KBS); i++) {
@@ -438,13 +437,21 @@ static int text_install(struct install_plan *p, const char *plan_path)
         strcpy(p->disk_name, disks[d].name);
         p->disk_bytes = disks[d].bytes;
         p->free_bytes = disks[d].free_bytes;
-        p->keep_esp = disks[d].has_windows;
     } else if (read_line("Device path (for a later run, e.g. /dev/sda): ", buf, sizeof buf, 0) == 0)
         snprintf(p->disk, sizeof p->disk, "%s", buf);
 
     printf("\nHow to use the disk:\n  1) free space (keep what is there)\n  2) erase the disk\n  3) custom sizes\n");
-    i = pick("Number", 3, 0);
-    p->mode = i == 1 ? MODE_ERASE : i == 2 ? MODE_CUSTOM : MODE_FREE;
+    for (;;) {
+        i = pick("Number", 3, 0);
+        p->mode = i == 1 ? MODE_ERASE : i == 2 ? MODE_CUSTOM : MODE_FREE;
+        const struct disk_info *dk = ndisk ? disks_find(disks, ndisk, p->disk) : NULL;
+        const char *why = p->mode != MODE_ERASE && dk
+            ? disks_free_problem(dk, (unsigned long long)MIN_INSTALL_GB * 1000000000ULL) : NULL;
+        p->keep_esp = dk && p->mode != MODE_ERASE && disks_has_esp(dk);
+        if (!why)
+            break;
+        printf("%s\n", why);
+    }
     if (read_line("System size in GB [32]: ", buf, sizeof buf, 0) == 0 && atoi(buf) >= MIN_INSTALL_GB)
         p->root_gb = atoi(buf);
     if (read_line("Separate /home (myos-data)? [Y/n] ", buf, sizeof buf, 0) == 0)
@@ -540,10 +547,13 @@ static double k = 1.0;
 static struct {
     GtkWidget *window, *stack, *back, *next, *extra;
     GtkWidget *step_lab[9];
-    GtkWidget *lang_list, *cjk, *kb_list, *try_kb, *detected;
+    GtkWidget *lang_list, *kb_list, *try_kb, *detected;
     GtkWidget *map, *tz_search, *region, *city, *now, *ntp, *winclk;
     GtkWidget *disk_list, *disk_bar, *mode_free, *mode_erase, *mode_custom, *free_note;
-    GtkWidget *before_bar, *after_bar, *part_list, *root_spin, *home, *encrypt;
+    GtkWidget *before_bar, *after_bar, *part_view, *root_spin, *home;
+    GtkWidget *pt_icon, *pt_title, *pt_add, *pt_resize, *pt_delete, *pt_format, *pt_useall;
+    GtkListStore *part_store;
+    GtkWidget *step_box[9], *step_dot[9];
     GtkWidget *full, *user, *pass, *pass2, *host, *strength, *ask_pw, *guest;
     GtkWidget *summary, *wifi, *warn;
     GtkWidget *work_lab[6], *work_mark[6], *prog, *file_lab;
@@ -574,17 +584,41 @@ static void apply_css(void)
         "* { font-family: 'DejaVu Sans'; color: #1d2430; }\n"
         "window.install { background-color: #fbfbf9; }\n"
         ".sidebar { background-image: linear-gradient(#f9e6c1, #efd3a0); }\n"
-        ".sidebar .step { padding: %dpx %dpx; color: #5b6573; }\n"
-        ".sidebar .step.now { color: #1d2430; font-weight: bold; }\n"
-        ".sidebar .step.done { color: #1f6d72; }\n"
+        ".sidebar .step { padding: %dpx %dpx; margin: 0 %dpx; border-radius: %dpx; }\n"
+        ".sidebar .step label { color: #5b6573; font-size: 12pt; }\n"
+        ".sidebar .step.done label { color: #1d2430; }\n"
+        ".sidebar .step.now { background-image: linear-gradient(#36a3a8, #1f7f84); }\n"
+        ".sidebar .step.now label { color: #ffffff; font-weight: bold; }\n"
+        ".foot button.next { background-image: linear-gradient(#36a3a8, #1f7f84); "
+        "border: 1px solid #1a6a6e; }\n"
+        ".foot button.next label { color: #ffffff; font-weight: bold; }\n"
+        ".foot button.next:disabled { opacity: 0.55; }\n"
+        ".ptable { border: 1px solid #d8c9a8; border-radius: %dpx; }\n"
+        ".ptable treeview.view header button { background-image: none; background-color: #f7f4ec; "
+        "font-weight: bold; padding: %dpx %dpx; border-left: none; border-right: none; "
+        "border-bottom: 1px solid #e3d9c4; }\n"
+        ".ptable treeview.view { font-size: 11pt; }\n"
+        ".ptable treeview.view:selected { background-color: #2a8f94; color: #ffffff; }\n"
+        ".ptool { background-image: none; background-color: transparent; border: none; "
+        "box-shadow: none; padding: %dpx %dpx; }\n"
+        ".ptool:hover { background-color: #f1ece0; }\n"
+        ".ptool image { margin-right: 10px; }\n"
+        ".ptool.danger image { color: #c62828; }\n"
+        ".notebox { background-color: #fff4dc; border: 1px solid #f0c46e; border-radius: %dpx; "
+        "padding: %dpx %dpx; }\n"
+        ".notebox image { color: #d38b1a; }\n"
         ".heading { font-weight: bold; font-size: 16pt; }\n"
         ".blurb { color: #5b6573; }\n"
         ".teal { color: #1f6d72; font-weight: bold; }\n"
+        ".diskname { font-weight: bold; font-size: 12pt; }\n"
+        "list.disks row:selected { background-color: #dcefee; }\n"
+        "list.disks row:selected label { color: #1d2430; }\n"
         ".warn { background-color: #fde3d4; color: #a24f00; padding: %dpx; }\n"
         ".note { background-color: #fff4dc; padding: %dpx; }\n"
         ".foot { border-top: 1px solid #d8c9a8; padding: %dpx; }\n"
         "progress, trough { min-height: %dpx; }\n",
-        S(4), S(10), S(8), S(8), S(10), S(18));
+        S(7), S(10), S(8), S(6), S(6), S(8), S(10), S(6), S(10), S(6), S(10), S(12),
+        S(8), S(8), S(10), S(18));
     if (!css)
         css = gtk_css_provider_new();
     gtk_css_provider_load_from_data(css, s, -1, NULL);
@@ -644,77 +678,254 @@ static void select_idx(GtkWidget *box, int idx)
     gtk_list_box_select_row(GTK_LIST_BOX(box), gtk_list_box_get_row_at_index(GTK_LIST_BOX(box), idx));
 }
 
-/* Disk bars: a cairo strip of partitions. parts[] is fraction, r,g,b, label. */
-struct bar_part { double frac; double r, g, b; const char *label; };
+/* --- the disk picker: a picture, the name and size, a check on the one ---- */
 
-static gboolean draw_bar(GtkWidget *w, cairo_t *cr, gpointer data)
+#define INSTALLER_ICONS "/usr/share/myos/icons/installer/"
+
+static GtkWidget *picture(const char *file, int px, const char *fallback_icon)
 {
-    struct bar_part *parts = data;
-    GtkAllocation a;
-    double x;
-
-    gtk_widget_get_allocation(w, &a);
-    cairo_set_source_rgb(cr, 1, 1, 1);
-    cairo_rectangle(cr, 0, 0, a.width, a.height);
-    cairo_fill(cr);
-    cairo_set_source_rgb(cr, 0.85, 0.80, 0.70);
-    cairo_rectangle(cr, 0.5, 0.5, a.width - 1, a.height - 1);
-    cairo_stroke(cr);
-    x = 1;
-    for (int i = 0; parts && parts[i].frac > 0; i++) {
-        double pw = (a.width - 2) * parts[i].frac;
-        cairo_set_source_rgb(cr, parts[i].r, parts[i].g, parts[i].b);
-        cairo_rectangle(cr, x, 1, pw, a.height - 2);
-        cairo_fill(cr);
-        if (pw > 50 && parts[i].label) {
-            cairo_set_source_rgb(cr, 1, 1, 1);
-            cairo_move_to(cr, x + 6, a.height / 2 + 4);
-            cairo_show_text(cr, parts[i].label);
-        }
-        x += pw;
-    }
-    return FALSE;
+    GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_size(file, px, px, NULL);
+    if (!pb)
+        return gtk_image_new_from_icon_name(fallback_icon, GTK_ICON_SIZE_DIALOG);
+    GtkWidget *img = gtk_image_new_from_pixbuf(pb);
+    g_object_unref(pb);
+    return img;
 }
 
-static struct bar_part before_parts[8], after_parts[8];
-
-static void fill_disk_parts(const struct disk_info *d, int after)
+/* One disk: a thumb drive's picture for a removable (USB) disk, a drive's
+   for the rest; its name, and size and state; and a big check mark, shown
+   only on the chosen one (show_check). */
+static GtkListBoxRow *add_disk_row(GtkWidget *box, const struct disk_info *d, int idx)
 {
-    struct bar_part *dst = after ? after_parts : before_parts;
-    memset(dst, 0, sizeof before_parts);
-    if (!d || !d->bytes)
+    char sz[32], detail[160];
+    disks_format_bytes(d->bytes, sz, sizeof sz);
+    snprintf(detail, sizeof detail, "%s   \u00b7   %s", sz, d->summary);
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(14));
+    gtk_container_set_border_width(GTK_CONTAINER(row), (guint)S(6));
+    gtk_box_pack_start(GTK_BOX(row),
+                       d->removable ? picture(INSTALLER_ICONS "drive-usb.svg", S(56), "drive-removable-media")
+                                    : picture(INSTALLER_ICONS "drive-internal.svg", S(56), "drive-harddisk"),
+                       FALSE, FALSE, 0);
+    GtkWidget *text = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(2));
+    gtk_widget_set_valign(text, GTK_ALIGN_CENTER);
+    gtk_box_pack_start(GTK_BOX(text), label_new(d->name, "diskname", 0), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(text), label_new(detail, "blurb", 0), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(row), text, TRUE, TRUE, 0);
+    GtkWidget *check = picture(INSTALLER_ICONS "check-big.svg", S(40), "emblem-ok-symbolic");
+    gtk_widget_set_opacity(check, 0);   /* (opacity, not hiding: the row keeps its size) */
+    gtk_box_pack_end(GTK_BOX(row), check, FALSE, FALSE, 0);
+    GtkWidget *wrap = gtk_list_box_row_new();
+    gtk_container_add(GTK_CONTAINER(wrap), row);
+    gtk_container_add(GTK_CONTAINER(box), wrap);
+    g_object_set_data(G_OBJECT(wrap), "idx", GINT_TO_POINTER(idx));
+    g_object_set_data(G_OBJECT(wrap), "check", check);
+    return GTK_LIST_BOX_ROW(wrap);
+}
+
+/* --- the partition page: the disk now, and as the plan leaves it ---------------- */
+
+/* One stretch of the disk. The bars and the table are drawn from these. */
+enum { K_ESP, K_WIN, K_OTHER, K_FREE, K_ROOT, K_DATA };
+struct lay {
+    int kind;
+    char name[64], type[24], mount[16], action[16];
+    unsigned long long bytes;
+};
+static struct lay before_lay[DISK_PARTS + 2], after_lay[DISK_PARTS + 6];
+static int nbefore, nafter;
+static unsigned long long root_room;    /* all the space myos-root could have ("Use all") */
+
+/* The mockup's colours (docs/installer/partition-manager-mockup.jpg). */
+static const double KIND_RGB[][3] = {
+    [K_ESP]   = { 0.294, 0.345, 0.412 },        /* EFI: slate */
+    [K_WIN]   = { 0.118, 0.435, 0.851 },        /* Windows: blue */
+    [K_OTHER] = { 0.200, 0.380, 0.600 },        /* another system: steel blue */
+    [K_FREE]  = { 0.953, 0.949, 0.933 },        /* unallocated: hatched */
+    [K_ROOT]  = { 0.910, 0.569, 0.176 },        /* myos-root: orange */
+    [K_DATA]  = { 0.235, 0.604, 0.235 },        /* myos-data: green */
+};
+
+static void lay_add(struct lay *l, int *n, int max, int kind, const char *name, const char *type,
+                    unsigned long long bytes, const char *mount, const char *action)
+{
+    if (*n >= max || !bytes)
         return;
-    int n = 0;
-    for (int i = 0; i < d->npart && n < 6; i++) {
-        dst[n].frac = (double)d->parts[i].bytes / (double)d->bytes;
-        if (d->parts[i].is_esp) {
-            dst[n].r = 0.49; dst[n].g = 0.61; dst[n].b = 0.72;
-        } else {
-            dst[n].r = 0.12; dst[n].g = 0.44; dst[n].b = 0.82;
+    struct lay *x = &l[(*n)++];
+    x->kind = kind;
+    x->bytes = bytes;
+    snprintf(x->name, sizeof x->name, "%s", name);
+    snprintf(x->type, sizeof x->type, "%s", type);
+    snprintf(x->mount, sizeof x->mount, "%s", mount);
+    snprintf(x->action, sizeof x->action, "%s", action);
+}
+
+static int windows_part(const struct disk_part *p)
+{
+    return strcasestr(p->label, "Basic data partition") || strcasestr(p->label, "Microsoft");
+}
+
+/* Before: the disk as it is. After: as the plan leaves it, by the same
+   rules the install helper follows (myos-install-helper.c): in the free
+   space, or the whole disk (keeping its EFI partition if it has one). */
+static void build_layout(const struct disk_info *d)
+{
+    nbefore = nafter = 0;
+    root_room = 0;
+    if (!d)
+        return;
+    int uefi = ui.plan.firmware == FW_UEFI, erase = ui.plan.mode == MODE_ERASE, have_esp = 0, nwin = 0;
+    unsigned long long room, kept = 0, gb = 1000000000ULL;
+    for (int i = 0; i < d->npart; i++) {
+        const struct disk_part *p = &d->parts[i];
+        int kind = p->is_esp ? K_ESP : windows_part(p) ? K_WIN : K_OTHER;
+        /* Windows names its partitions "Basic data partition": shown as
+           the drives people know (the first is C:). */
+        const char *name = p->is_esp ? "EFI System" : p->label[0] ? p->label : p->name;
+        if (kind == K_WIN && strcasestr(p->label, "Basic data"))
+            name = nwin++ ? "Windows (data)" : "Windows (C:)";
+        const char *type = p->is_esp ? "FAT32" : kind == K_WIN ? "NTFS" : "";
+        have_esp |= p->is_esp;
+        lay_add(before_lay, &nbefore, DISK_PARTS + 2, kind, name, type, p->bytes, "", "keep");
+        if (!erase) {                   /* erasing keeps nothing, not even an EFI partition */
+            lay_add(after_lay, &nafter, DISK_PARTS + 6, kind, name, type, p->bytes,
+                    p->is_esp && uefi ? "/boot/efi" : "\u2014", "keep");
+            kept += p->bytes;
         }
-        dst[n].label = d->parts[i].label[0] ? d->parts[i].label : d->parts[i].name;
-        n++;
     }
-    if (d->free_bytes) {
-        dst[n].frac = (double)d->free_bytes / (double)d->bytes;
-        if (after) {
-            double root = (ui.plan.root_gb * 1e9) / (double)d->bytes;
-            if (root > dst[n].frac)
-                root = dst[n].frac;
-            dst[n].r = 0.12; dst[n].g = 0.50; dst[n].b = 0.53;
-            dst[n].label = "root";
-            dst[n].frac = root;
-            n++;
-            if (ui.plan.separate_home && d->free_bytes > (unsigned long long)ui.plan.root_gb * 1000000000ULL) {
-                dst[n].frac = (double)d->free_bytes / (double)d->bytes - root;
-                dst[n].r = 0.17; dst[n].g = 0.58; dst[n].b = 0.19;
-                dst[n].label = "myos-data";
+    lay_add(before_lay, &nbefore, DISK_PARTS + 2, K_FREE, "Unallocated", "", d->free_bytes, "", "");
+    room = erase ? d->bytes - kept : d->free_bytes;
+    if (uefi && (erase || !have_esp)) {
+        unsigned long long esp = (unsigned long long)ESP_MIB << 20;
+        lay_add(after_lay, &nafter, DISK_PARTS + 6, K_ESP, "EFI System", "FAT32", esp, "/boot/efi", "new");
+        room = room > esp ? room - esp : 0;
+    }
+    root_room = room;
+    unsigned long long root = (unsigned long long)ui.plan.root_gb * gb;
+    if (root > room)
+        root = room;
+    lay_add(after_lay, &nafter, DISK_PARTS + 6, K_ROOT, "myos-root", "ext2", root, "/", "new");
+    room -= root;
+    if (ui.plan.separate_home && room >= gb) {
+        lay_add(after_lay, &nafter, DISK_PARTS + 6, K_DATA, "myos-data", "ext2", room, "/home", "new");
+        room = 0;
+    }
+    lay_add(after_lay, &nafter, DISK_PARTS + 6, K_FREE, "Unallocated", "", room >= (16u << 20) ? room : 0,
+            "", "");
+}
+
+static void rounded(cairo_t *cr, double x, double y, double w, double h, double r)
+{
+    if (r > w / 2)
+        r = w / 2;
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, x + w - r, y + r, r, -G_PI / 2, 0);
+    cairo_arc(cr, x + w - r, y + h - r, r, 0, G_PI / 2);
+    cairo_arc(cr, x + r, y + h - r, r, G_PI / 2, G_PI);
+    cairo_arc(cr, x + r, y + r, r, G_PI, 3 * G_PI / 2);
+    cairo_close_path(cr);
+}
+
+/* Block widths: each at least `min` (a 260 MB EFI partition on a 1 TB disk
+   must still be seen and read), the rest shared by size. A block pinned at
+   the minimum leaves less for the others, so repeat until none changes. */
+static void block_widths(const struct lay *l, int n, double avail, double min, double *w)
+{
+    int pinned[DISK_PARTS + 6] = { 0 };
+    for (int round = 0; round < n; round++) {
+        double share = 0, rest = avail;
+        int changed = 0;
+        for (int i = 0; i < n; i++)
+            if (pinned[i])
+                rest -= min;
+            else
+                share += (double)l[i].bytes;
+        for (int i = 0; i < n; i++) {
+            w[i] = pinned[i] ? min : share > 0 ? rest * (double)l[i].bytes / share : 0;
+            if (!pinned[i] && w[i] < min) {
+                pinned[i] = changed = 1;
+                w[i] = min;
             }
-        } else {
-            dst[n].r = 0.79; dst[n].g = 0.76; dst[n].b = 0.70;
-            dst[n].label = "Free";
         }
+        if (!changed)
+            break;
     }
+}
+
+/* The bars: "Before" slim and plain, "After" tall with each block named. */
+static gboolean draw_layout(GtkWidget *w, cairo_t *cr, gpointer data)
+{
+    int after = GPOINTER_TO_INT(data);
+    const struct lay *l = after ? after_lay : before_lay;
+    int n = after ? nafter : nbefore;
+    double W = gtk_widget_get_allocated_width(w), H = gtk_widget_get_allocated_height(w);
+    double gap = after ? S(4) : S(2), r = S(after ? 5 : 4), x = 0, wid[DISK_PARTS + 6];
+
+    cairo_set_source_rgb(cr, 0.98, 0.98, 0.97);
+    rounded(cr, 0.5, 0.5, W - 1, H - 1, r);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgb(cr, 0.85, 0.80, 0.70);
+    cairo_set_line_width(cr, 1);
+    cairo_stroke(cr);
+    if (!n)
+        return FALSE;
+    double inner = after ? S(4) : S(2), avail = W - 2 * inner - gap * (n - 1);
+    block_widths(l, n, avail, after ? S(84) : S(6), wid);
+    x = inner;
+    for (int i = 0; i < n; i++) {
+        double bx = x, by = inner, bw = wid[i], bh = H - 2 * inner;
+        const double *c = KIND_RGB[l[i].kind];
+        cairo_pattern_t *g = cairo_pattern_create_linear(0, by, 0, by + bh);
+        cairo_pattern_add_color_stop_rgb(g, 0, c[0] * 1.08 > 1 ? 1 : c[0] * 1.08,
+                                         c[1] * 1.08 > 1 ? 1 : c[1] * 1.08, c[2] * 1.08 > 1 ? 1 : c[2] * 1.08);
+        cairo_pattern_add_color_stop_rgb(g, 1, c[0] * 0.9, c[1] * 0.9, c[2] * 0.9);
+        rounded(cr, bx, by, bw, bh, r - 1);
+        cairo_set_source(cr, g);
+        cairo_fill(cr);
+        cairo_pattern_destroy(g);
+        if (l[i].kind == K_FREE) {              /* unallocated: hatched, outlined */
+            cairo_save(cr);
+            rounded(cr, bx, by, bw, bh, r - 1);
+            cairo_clip(cr);
+            cairo_set_source_rgb(cr, 0.84, 0.82, 0.78);
+            cairo_set_line_width(cr, 1.2);
+            for (double t = -bh; t < bw; t += S(7)) {
+                cairo_move_to(cr, bx + t, by + bh);
+                cairo_line_to(cr, bx + t + bh, by);
+            }
+            cairo_stroke(cr);
+            cairo_restore(cr);
+            cairo_set_source_rgb(cr, 0.78, 0.75, 0.69);
+            rounded(cr, bx + 0.5, by + 0.5, bw - 1, bh - 1, r - 1);
+            cairo_stroke(cr);
+        }
+        if (after) {                            /* name, type, size, centred */
+            char sz[32], *markup;
+            disks_format_bytes(l[i].bytes, sz, sizeof sz);
+            markup = g_markup_printf_escaped("<b>%s</b>%s%s\n%s", l[i].name,
+                                             l[i].type[0] ? "\n" : "", l[i].type, sz);
+            PangoLayout *pl = pango_cairo_create_layout(cr);
+            PangoFontDescription *fd = pango_font_description_from_string("DejaVu Sans 10");
+            pango_font_description_set_absolute_size(fd, S(12) * PANGO_SCALE);
+            pango_layout_set_font_description(pl, fd);
+            pango_layout_set_markup(pl, markup, -1);
+            pango_layout_set_alignment(pl, PANGO_ALIGN_CENTER);
+            pango_layout_set_width(pl, (int)((bw - S(8)) * PANGO_SCALE));
+            pango_layout_set_ellipsize(pl, PANGO_ELLIPSIZE_END);
+            int tw, th;
+            pango_layout_get_pixel_size(pl, &tw, &th);
+            if (l[i].kind == K_FREE)
+                cairo_set_source_rgb(cr, 0.18, 0.21, 0.26);
+            else
+                cairo_set_source_rgb(cr, 1, 1, 1);
+            cairo_move_to(cr, bx + S(4), by + (bh - th) / 2);
+            pango_cairo_show_layout(cr, pl);
+            pango_font_description_free(fd);
+            g_object_unref(pl);
+            g_free(markup);
+        }
+        x += wid[i] + gap;
+    }
+    return FALSE;
 }
 
 static const struct disk_info *cur_disk(void)
@@ -724,23 +935,68 @@ static const struct disk_info *cur_disk(void)
     return &ui.disks[ui.disk_sel];
 }
 
+/* A step's circle in the sidebar: a check once it is done, its number
+   otherwise — white with a teal number on the pill of the step you are on. */
+static gboolean draw_step_dot(GtkWidget *w, cairo_t *cr, gpointer data)
+{
+    int i = GPOINTER_TO_INT(data), done = i < ui.page, now = i == ui.page;
+    double W = gtk_widget_get_allocated_width(w), H = gtk_widget_get_allocated_height(w);
+    double r = (W < H ? W : H) / 2 - 1.5, cx = W / 2, cy = H / 2;
+
+    cairo_arc(cr, cx, cy, r, 0, 2 * G_PI);
+    if (now) {
+        cairo_set_source_rgb(cr, 1, 1, 1);
+        cairo_fill(cr);
+    } else {
+        if (done)
+            cairo_set_source_rgb(cr, 0.12, 0.43, 0.45);
+        else
+            cairo_set_source_rgb(cr, 0.64, 0.68, 0.72);
+        cairo_set_line_width(cr, S(1.6));
+        cairo_stroke(cr);
+    }
+    if (done) {
+        cairo_set_source_rgb(cr, 0.12, 0.43, 0.45);
+        cairo_set_line_width(cr, S(2.2));
+        cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+        cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+        cairo_move_to(cr, cx - r * 0.45, cy + r * 0.02);
+        cairo_line_to(cr, cx - r * 0.1, cy + r * 0.38);
+        cairo_line_to(cr, cx + r * 0.5, cy - r * 0.38);
+        cairo_stroke(cr);
+        return FALSE;
+    }
+    char num[4];
+    snprintf(num, sizeof num, "%d", i + 1);
+    PangoLayout *pl = pango_cairo_create_layout(cr);
+    PangoFontDescription *fd = pango_font_description_from_string("DejaVu Sans Bold 10");
+    pango_font_description_set_absolute_size(fd, S(12) * PANGO_SCALE);
+    pango_layout_set_font_description(pl, fd);
+    pango_layout_set_text(pl, num, -1);
+    int tw, th;
+    pango_layout_get_pixel_size(pl, &tw, &th);
+    if (now)
+        cairo_set_source_rgb(cr, 0.12, 0.50, 0.52);
+    else
+        cairo_set_source_rgb(cr, 0.54, 0.57, 0.61);
+    cairo_move_to(cr, cx - tw / 2.0, cy - th / 2.0);
+    pango_cairo_show_layout(cr, pl);
+    pango_font_description_free(fd);
+    g_object_unref(pl);
+    return FALSE;
+}
+
 static void refresh_side(void)
 {
     for (int i = 0; i < 9; i++) {
-        char t[64];
-        GtkStyleContext *c = gtk_widget_get_style_context(ui.step_lab[i]);
+        GtkStyleContext *c = gtk_widget_get_style_context(ui.step_box[i]);
         gtk_style_context_remove_class(c, "now");
         gtk_style_context_remove_class(c, "done");
-        if (i < ui.page) {
-            snprintf(t, sizeof t, "✓  %s", STEPS[i]);
+        if (i < ui.page)
             gtk_style_context_add_class(c, "done");
-        } else if (i == ui.page) {
-            snprintf(t, sizeof t, "%d  %s", i + 1, STEPS[i]);
+        else if (i == ui.page)
             gtk_style_context_add_class(c, "now");
-        } else {
-            snprintf(t, sizeof t, "%d  %s", i + 1, STEPS[i]);
-        }
-        gtk_label_set_text(GTK_LABEL(ui.step_lab[i]), t);
+        gtk_widget_queue_draw(ui.step_dot[i]);
     }
 }
 
@@ -754,7 +1010,6 @@ static void gather(void)
 
     strcpy(p->lang, L->id);
     strcpy(p->lang_name, L->native);
-    p->cjk = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui.cjk));
     strcpy(p->keyboard, K->id);
     strcpy(p->keyboard_name, K->name);
     snprintf(p->timezone, sizeof p->timezone, "%s", tzs[ui.tz_sel].id);
@@ -765,7 +1020,6 @@ static void gather(void)
         strcpy(p->disk_name, d->name);
         p->disk_bytes = d->bytes;
         p->free_bytes = d->free_bytes;
-        p->keep_esp = d->has_windows || d->npart > 0;
     }
     if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui.mode_erase)))
         p->mode = MODE_ERASE;
@@ -773,6 +1027,8 @@ static void gather(void)
         p->mode = MODE_CUSTOM;
     else
         p->mode = MODE_FREE;
+    /* Erasing makes a new EFI partition; only the other ways keep one. */
+    p->keep_esp = d && p->mode != MODE_ERASE && disks_has_esp(d);
     p->root_gb = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(ui.root_spin));
     p->separate_home = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui.home));
     p->encrypt = 0;
@@ -832,31 +1088,142 @@ static void refresh_summary(void)
     }
 }
 
+enum { PC_NAME, PC_TYPE, PC_SIZE, PC_MOUNT, PC_ACTION, PC_KIND, PC_N };
+
+/* The tool buttons follow the selected row: Resize the system, Delete the
+   separate myos-data, Add it back when there is room. Format is never
+   needed: MyOS's new partitions are always formatted, and it leaves the
+   others alone. */
+static void pt_tools(void)
+{
+    GtkTreeModel *m;
+    GtkTreeIter it;
+    int kind = -1, room = 0;
+    if (gtk_tree_selection_get_selected(gtk_tree_view_get_selection(GTK_TREE_VIEW(ui.part_view)), &m, &it))
+        gtk_tree_model_get(m, &it, PC_KIND, &kind, -1);
+    for (int i = 0; i < nafter; i++)
+        room |= after_lay[i].kind == K_FREE;
+    gtk_widget_set_sensitive(ui.pt_resize, kind == K_ROOT);
+    gtk_widget_set_sensitive(ui.pt_delete, kind == K_DATA);
+    gtk_widget_set_sensitive(ui.pt_add, room && !ui.plan.separate_home);
+}
+
+static void pt_selected(GtkTreeSelection *sel, gpointer unused)
+{
+    (void)sel, (void)unused;
+    pt_tools();
+}
+
+static void pt_root_changed(GtkSpinButton *sp, gpointer unused);
+
 static void refresh_parts(void)
 {
     const struct disk_info *d = cur_disk();
-    GList *children, *c;
+    GtkTreeIter it, sel;
+    int have_sel = 0;
 
-    fill_disk_parts(d, 0);
-    fill_disk_parts(d, 1);
+    build_layout(d);
     gtk_widget_queue_draw(ui.before_bar);
     gtk_widget_queue_draw(ui.after_bar);
     gtk_widget_queue_draw(ui.disk_bar);
-
-    children = gtk_container_get_children(GTK_CONTAINER(ui.part_list));
-    for (c = children; c; c = c->next)
-        gtk_widget_destroy(GTK_WIDGET(c->data));
-    g_list_free(children);
-    if (!d)
-        add_row(ui.part_list, "No disk selected", "", 0);
-    else {
-        if (ui.plan.firmware == FW_UEFI)
-            add_row(ui.part_list, "EFI system partition",
-                    ui.plan.keep_esp ? "kept; MyOS adds EFI/MYOS" : "new, 260 MB", 0);
-        add_row(ui.part_list, "myos-root  (ext2, /)", "the system", 1);
-        if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui.home)))
-            add_row(ui.part_list, "myos-data  (ext2, /home)", "your files", 2);
+    gtk_label_set_text(GTK_LABEL(ui.pt_title), d ? d->name : "No disk chosen");
+    if (d) {
+        GdkPixbuf *pb = gdk_pixbuf_new_from_file_at_size(
+            d->removable ? INSTALLER_ICONS "drive-usb.svg" : INSTALLER_ICONS "drive-internal.svg",
+            S(44), S(44), NULL);
+        if (pb) {
+            gtk_image_set_from_pixbuf(GTK_IMAGE(ui.pt_icon), pb);
+            g_object_unref(pb);
+        }
     }
+    gtk_list_store_clear(ui.part_store);
+    for (int i = 0; i < nafter; i++) {
+        char sz[32];
+        disks_format_bytes(after_lay[i].bytes, sz, sizeof sz);
+        gtk_list_store_append(ui.part_store, &it);
+        gtk_list_store_set(ui.part_store, &it, PC_NAME, after_lay[i].name,
+                           PC_TYPE, after_lay[i].type[0] ? after_lay[i].type : "\u2014",
+                           PC_SIZE, sz, PC_MOUNT, after_lay[i].mount[0] ? after_lay[i].mount : "\u2014",
+                           PC_ACTION, after_lay[i].action[0] ? after_lay[i].action : "\u2014",
+                           PC_KIND, after_lay[i].kind, -1);
+        if (after_lay[i].kind == K_ROOT) {
+            sel = it;
+            have_sel = 1;
+        }
+    }
+    if (have_sel)
+        gtk_tree_selection_select_iter(gtk_tree_view_get_selection(GTK_TREE_VIEW(ui.part_view)), &sel);
+    /* The size can't be more than the disk has room for. (Setting the range
+       may change the value: not a change of the user's, so not refreshed.) */
+    int max_gb = (int)(root_room / 1000000000ULL);
+    if (max_gb < MIN_INSTALL_GB)
+        max_gb = MIN_INSTALL_GB;
+    g_signal_handlers_block_by_func(ui.root_spin, pt_root_changed, NULL);
+    gtk_spin_button_set_range(GTK_SPIN_BUTTON(ui.root_spin), MIN_INSTALL_GB, max_gb);
+    g_signal_handlers_unblock_by_func(ui.root_spin, pt_root_changed, NULL);
+    char all[64];
+    snprintf(all, sizeof all, "Use all (%d GB)", max_gb);
+    gtk_button_set_label(GTK_BUTTON(ui.pt_useall), all);
+    pt_tools();
+}
+
+/* The note's mark: an orange ring with an "i". */
+static gboolean draw_info_mark(GtkWidget *w, cairo_t *cr, gpointer unused)
+{
+    (void)unused;
+    double W = gtk_widget_get_allocated_width(w), H = gtk_widget_get_allocated_height(w);
+    double r = (W < H ? W : H) / 2 - 1.5, cx = W / 2, cy = H / 2;
+    cairo_set_source_rgb(cr, 0.83, 0.55, 0.10);
+    cairo_set_line_width(cr, S(1.8));
+    cairo_arc(cr, cx, cy, r, 0, 2 * G_PI);
+    cairo_stroke(cr);
+    cairo_arc(cr, cx, cy - r * 0.45, r * 0.13, 0, 2 * G_PI);
+    cairo_fill(cr);
+    cairo_set_line_width(cr, r * 0.22);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    cairo_move_to(cr, cx, cy - r * 0.12);
+    cairo_line_to(cr, cx, cy + r * 0.5);
+    cairo_stroke(cr);
+    return FALSE;
+}
+
+/* Resize: the system's size, in a little window under the button. */
+static void pt_resize_clicked(GtkButton *b, gpointer pop)
+{
+    (void)b;
+    gtk_widget_show_all(GTK_WIDGET(pop));
+    gtk_popover_popup(GTK_POPOVER(pop));
+    gtk_widget_grab_focus(ui.root_spin);
+}
+
+static void pt_root_changed(GtkSpinButton *sp, gpointer unused)
+{
+    (void)sp, (void)unused;
+    gather();
+    refresh_parts();
+}
+
+/* "Use all": every byte MyOS has goes to the system; your files live in it
+   (no separate myos-data). */
+static void pt_use_all(GtkButton *b, gpointer pop)
+{
+    (void)b;
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ui.home), FALSE);
+    gather();
+    int max_gb = (int)(root_room / 1000000000ULL);
+    if (gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(ui.root_spin)) == max_gb)
+        refresh_parts();                /* (no value change, no signal) */
+    else
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(ui.root_spin), max_gb);   /* -> refresh */
+    gtk_popover_popdown(GTK_POPOVER(pop));
+}
+
+static void pt_home(GtkButton *b, gpointer on)
+{
+    (void)b;
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ui.home), GPOINTER_TO_INT(on));
+    gather();
+    refresh_parts();
 }
 
 static void set_page(int page);
@@ -869,7 +1236,6 @@ static void lang_picked(GtkListBox *box, GtkListBoxRow *row, gpointer unused)
     if (!row)
         return;
     ui.lang_sel = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "idx"));
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ui.cjk), LANGS[ui.lang_sel].cjk);
     for (int i = 0; i < (int)(sizeof KBS / sizeof *KBS); i++)
         if (!strcmp(KBS[i].id, LANGS[ui.lang_sel].keyboard)) {
             ui.kb_sel = i;
@@ -888,12 +1254,25 @@ static void kb_picked(GtkListBox *box, GtkListBoxRow *row, gpointer unused)
     apply_layout(KBS[ui.kb_sel].id);
 }
 
+/* The big check mark: on the chosen disk's row, off on the others. */
+static void show_check(void)
+{
+    GtkListBoxRow *r;
+    for (int k = 0; (r = gtk_list_box_get_row_at_index(GTK_LIST_BOX(ui.disk_list), k)); k++) {
+        GtkWidget *c = g_object_get_data(G_OBJECT(r), "check");
+        if (c)
+            gtk_widget_set_opacity(c, GPOINTER_TO_INT(g_object_get_data(G_OBJECT(r), "idx")) ==
+                                          ui.disk_sel ? 1.0 : 0.0);
+    }
+}
+
 static void disk_picked(GtkListBox *box, GtkListBoxRow *row, gpointer unused)
 {
     (void)box, (void)unused;
     if (!row)
         return;
     ui.disk_sel = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "idx"));
+    show_check();
     gather();
     refresh_parts();
 }
@@ -1291,8 +1670,6 @@ static GtkWidget *build_pages(void)
     g_signal_connect(ui.lang_list, "row-selected", G_CALLBACK(lang_picked), NULL);
     gtk_container_add(GTK_CONTAINER(scroll), ui.lang_list);
     gtk_box_pack_start(GTK_BOX(body), scroll, TRUE, TRUE, 0);
-    ui.cjk = gtk_check_button_new_with_label("Also install fonts and input for Chinese (pinyin)");
-    gtk_box_pack_start(GTK_BOX(body), ui.cjk, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(body),
                        label_new("Not ready to install? Close this window to keep trying MyOS from the stick.",
                                  "blurb", 0),
@@ -1364,11 +1741,12 @@ static GtkWidget *build_pages(void)
     /* 3 disk */
     page = page_box("Where to install", "MyOS needs at least 8 GB. Pick a disk, then how to use it.", &body);
     ui.disk_list = gtk_list_box_new();
+    gtk_style_context_add_class(gtk_widget_get_style_context(ui.disk_list), "disks");
     g_signal_connect(ui.disk_list, "row-selected", G_CALLBACK(disk_picked), NULL);
     gtk_box_pack_start(GTK_BOX(body), ui.disk_list, FALSE, FALSE, 0);
     ui.disk_bar = gtk_drawing_area_new();
     gtk_widget_set_size_request(ui.disk_bar, -1, S(28));
-    g_signal_connect(ui.disk_bar, "draw", G_CALLBACK(draw_bar), before_parts);
+    g_signal_connect(ui.disk_bar, "draw", G_CALLBACK(draw_layout), GINT_TO_POINTER(0));
     gtk_box_pack_start(GTK_BOX(body), ui.disk_bar, FALSE, FALSE, 0);
     ui.mode_free = gtk_radio_button_new_with_label(NULL, "Install MyOS in the free space");
     ui.mode_erase = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(ui.mode_free),
@@ -1384,35 +1762,130 @@ static GtkWidget *build_pages(void)
     gtk_box_pack_start(GTK_BOX(body), ui.free_note, FALSE, FALSE, 0);
     gtk_stack_add_named(GTK_STACK(ui.stack), page, "3");
 
-    /* 4 partitions */
-    page = page_box("Partitions", "What MyOS will make. Nothing is written yet.", &body);
-    gtk_box_pack_start(GTK_BOX(body), label_new("Before", "blurb", 0), FALSE, FALSE, 0);
-    ui.before_bar = gtk_drawing_area_new();
-    gtk_widget_set_size_request(ui.before_bar, -1, S(28));
-    g_signal_connect(ui.before_bar, "draw", G_CALLBACK(draw_bar), before_parts);
-    gtk_box_pack_start(GTK_BOX(body), ui.before_bar, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(body), label_new("After", "blurb", 0), FALSE, FALSE, 0);
-    ui.after_bar = gtk_drawing_area_new();
-    gtk_widget_set_size_request(ui.after_bar, -1, S(28));
-    g_signal_connect(ui.after_bar, "draw", G_CALLBACK(draw_bar), after_parts);
-    gtk_box_pack_start(GTK_BOX(body), ui.after_bar, FALSE, FALSE, 0);
-    ui.part_list = gtk_list_box_new();
-    gtk_box_pack_start(GTK_BOX(body), ui.part_list, TRUE, TRUE, 0);
+    /* 4 partitions: docs/installer/partition-manager-mockup.jpg */
+    page = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(8));
+    gtk_widget_set_margin_start(page, S(20));
+    gtk_widget_set_margin_end(page, S(20));
+    gtk_widget_set_margin_top(page, S(16));
     {
-        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(8));
-        gtk_box_pack_start(GTK_BOX(row), label_new("System size:", NULL, 0), FALSE, FALSE, 0);
-        ui.root_spin = gtk_spin_button_new_with_range(MIN_INSTALL_GB, 512, 1);
-        gtk_spin_button_set_value(GTK_SPIN_BUTTON(ui.root_spin), DEFAULT_ROOT_GB);
-        gtk_box_pack_start(GTK_BOX(row), ui.root_spin, FALSE, FALSE, 0);
-        gtk_box_pack_start(GTK_BOX(row), label_new("GB", "blurb", 0), FALSE, FALSE, 0);
-        gtk_box_pack_start(GTK_BOX(body), row, FALSE, FALSE, 0);
+        GtkWidget *head = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(14)), *t;
+        ui.pt_icon = gtk_image_new();
+        gtk_box_pack_start(GTK_BOX(head), ui.pt_icon, FALSE, FALSE, 0);
+        t = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(2));
+        gtk_widget_set_valign(t, GTK_ALIGN_CENTER);
+        ui.pt_title = label_new("", "heading", 0);
+        gtk_box_pack_start(GTK_BOX(t), ui.pt_title, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(t), label_new("How MyOS will lay out this disk.", "blurb", 0),
+                           FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(head), t, TRUE, TRUE, 0);
+        gtk_box_pack_start(GTK_BOX(page), head, FALSE, FALSE, 0);
     }
-    ui.home = gtk_check_button_new_with_label("Keep my files on a separate partition (myos-data)");
+    gtk_box_pack_start(GTK_BOX(page), label_new("Before", NULL, 0), FALSE, FALSE, 0);
+    ui.before_bar = gtk_drawing_area_new();
+    gtk_widget_set_size_request(ui.before_bar, -1, S(26));
+    g_signal_connect(ui.before_bar, "draw", G_CALLBACK(draw_layout), GINT_TO_POINTER(0));
+    gtk_box_pack_start(GTK_BOX(page), ui.before_bar, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(page), label_new("After", NULL, 0), FALSE, FALSE, S(2));
+    ui.after_bar = gtk_drawing_area_new();
+    gtk_widget_set_size_request(ui.after_bar, -1, S(92));
+    g_signal_connect(ui.after_bar, "draw", G_CALLBACK(draw_layout), GINT_TO_POINTER(1));
+    gtk_box_pack_start(GTK_BOX(page), ui.after_bar, FALSE, FALSE, S(2));
+    {
+        /* The table, and the tools beside it. */
+        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(16)), *frame, *tools;
+        static const char *const head[] = { "Partition", "Type", "Size", "Mount", "Action" };
+        ui.part_store = gtk_list_store_new(PC_N, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING,
+                                           G_TYPE_STRING, G_TYPE_STRING, G_TYPE_INT);
+        ui.part_view = gtk_tree_view_new_with_model(GTK_TREE_MODEL(ui.part_store));
+        for (int c = 0; c < 5; c++) {
+            GtkCellRenderer *r = gtk_cell_renderer_text_new();
+            g_object_set(r, "ypad", S(4), "xpad", S(10), NULL);
+            if (c > 0)
+                g_object_set(r, "xalign", 0.5, NULL);
+            GtkTreeViewColumn *col = gtk_tree_view_column_new_with_attributes(head[c], r, "text", c, NULL);
+            gtk_tree_view_column_set_expand(col, c == 0);
+            if (c > 0)
+                gtk_tree_view_column_set_alignment(col, 0.5);
+            gtk_tree_view_append_column(GTK_TREE_VIEW(ui.part_view), col);
+        }
+        gtk_tree_view_set_enable_search(GTK_TREE_VIEW(ui.part_view), FALSE);
+        gtk_tree_view_set_grid_lines(GTK_TREE_VIEW(ui.part_view), GTK_TREE_VIEW_GRID_LINES_HORIZONTAL);
+        g_signal_connect(gtk_tree_view_get_selection(GTK_TREE_VIEW(ui.part_view)), "changed",
+                         G_CALLBACK(pt_selected), NULL);
+        frame = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        gtk_style_context_add_class(gtk_widget_get_style_context(frame), "ptable");
+        gtk_widget_set_size_request(frame, -1, S(200));
+        gtk_box_pack_start(GTK_BOX(frame), ui.part_view, TRUE, TRUE, 0);
+        gtk_box_pack_start(GTK_BOX(row), frame, TRUE, TRUE, 0);
+
+        tools = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(4));
+        static const struct { const char *icon, *label; } T[] = {
+            { "drive-harddisk-symbolic", "Add partition" },
+            { "document-properties-symbolic", "Resize" },
+            { "edit-delete-symbolic", "Delete" },
+            { "edit-clear-all-symbolic", "Format" },
+        };
+        GtkWidget **slot[] = { &ui.pt_add, &ui.pt_resize, &ui.pt_delete, &ui.pt_format };
+        for (int k = 0; k < 4; k++) {
+            /* GTK's own icon-and-label button, its content set to the left
+               (a box of our own inside a button was placed oddly). */
+            GtkWidget *b = gtk_button_new_with_label(T[k].label);
+            gtk_button_set_image(GTK_BUTTON(b), gtk_image_new_from_icon_name(T[k].icon,
+                                                                            GTK_ICON_SIZE_LARGE_TOOLBAR));
+            gtk_button_set_always_show_image(GTK_BUTTON(b), TRUE);
+            gtk_button_set_image_position(GTK_BUTTON(b), GTK_POS_LEFT);
+            G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+            gtk_button_set_alignment(GTK_BUTTON(b), 0.0, 0.5);
+            G_GNUC_END_IGNORE_DEPRECATIONS
+            gtk_style_context_add_class(gtk_widget_get_style_context(b), "ptool");
+            if (k == 2)
+                gtk_style_context_add_class(gtk_widget_get_style_context(b), "danger");
+            gtk_box_pack_start(GTK_BOX(tools), b, FALSE, FALSE, 0);
+            *slot[k] = b;
+        }
+        gtk_widget_set_tooltip_text(ui.pt_add, "Add back the separate partition for your files (myos-data).");
+        gtk_widget_set_tooltip_text(ui.pt_resize, "Change how big the system (myos-root) is.");
+        gtk_widget_set_tooltip_text(ui.pt_delete, "No separate partition for your files: they go in myos-root.");
+        gtk_widget_set_tooltip_text(ui.pt_format,
+                                    "Not needed: MyOS's new partitions are always formatted, and the others are left alone.");
+        gtk_widget_set_sensitive(ui.pt_format, FALSE);
+
+        /* Resize's little window: the system's size. */
+        GtkWidget *pop = gtk_popover_new(ui.pt_resize), *pr = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(8));
+        gtk_container_set_border_width(GTK_CONTAINER(pr), (guint)S(10));
+        gtk_box_pack_start(GTK_BOX(pr), label_new("System size:", NULL, 0), FALSE, FALSE, 0);
+        ui.root_spin = gtk_spin_button_new_with_range(MIN_INSTALL_GB, 4096, 1);
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(ui.root_spin), DEFAULT_ROOT_GB);
+        gtk_box_pack_start(GTK_BOX(pr), ui.root_spin, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(pr), label_new("GB", "blurb", 0), FALSE, FALSE, 0);
+        ui.pt_useall = gtk_button_new_with_label("Use all");
+        gtk_widget_set_tooltip_text(ui.pt_useall, "All of MyOS's space for the system; your files live in it "
+                                                  "(no separate myos-data).");
+        g_signal_connect(ui.pt_useall, "clicked", G_CALLBACK(pt_use_all), pop);
+        gtk_box_pack_start(GTK_BOX(pr), ui.pt_useall, FALSE, FALSE, S(6));
+        gtk_container_add(GTK_CONTAINER(pop), pr);
+        g_signal_connect(ui.pt_resize, "clicked", G_CALLBACK(pt_resize_clicked), pop);
+        g_signal_connect(ui.root_spin, "value-changed", G_CALLBACK(pt_root_changed), NULL);
+        g_signal_connect(ui.pt_add, "clicked", G_CALLBACK(pt_home), GINT_TO_POINTER(1));
+        g_signal_connect(ui.pt_delete, "clicked", G_CALLBACK(pt_home), GINT_TO_POINTER(0));
+        gtk_box_pack_start(GTK_BOX(row), tools, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(page), row, TRUE, TRUE, S(4));
+    }
+    {
+        GtkWidget *note = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(10));
+        gtk_style_context_add_class(gtk_widget_get_style_context(note), "notebox");
+        GtkWidget *mark = gtk_drawing_area_new();
+        gtk_widget_set_size_request(mark, S(26), S(26));
+        g_signal_connect(mark, "draw", G_CALLBACK(draw_info_mark), NULL);
+        gtk_box_pack_start(GTK_BOX(note), mark, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(note), label_new("Nothing is written until you click Install", NULL, 0),
+                           FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(page), note, FALSE, FALSE, S(6));
+    }
+    /* Whether myos-data is separate: Add partition / Delete set it. */
+    ui.home = gtk_check_button_new();
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ui.home), TRUE);
-    ui.encrypt = gtk_check_button_new_with_label("Encrypt the data partition (later: not available yet)");
-    gtk_widget_set_sensitive(ui.encrypt, FALSE);
-    gtk_box_pack_start(GTK_BOX(body), ui.home, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(body), ui.encrypt, FALSE, FALSE, 0);
+    g_object_ref_sink(ui.home);
     gtk_stack_add_named(GTK_STACK(ui.stack), page, "4");
 
     /* 5 account */
@@ -1507,7 +1980,9 @@ static gboolean page_ok(int page, char *err, size_t n)
     if (page == 3) {
         const struct disk_info *d = cur_disk();
         if (d && d->in_use) {
-            snprintf(err, n, "MyOS is running from that disk. Pick another one.");
+            snprintf(err, n, "%s", d->running ? "MyOS is running from that disk. Pick another one."
+                                              : "That disk is still in use from an earlier try. "
+                                                "Restart the computer, then install again.");
             return FALSE;
         }
         if (!ui.plan.disk[0]) {
@@ -1516,9 +1991,12 @@ static gboolean page_ok(int page, char *err, size_t n)
                              "and save a plan; Install will explain what is missing.");
             /* allow going on so a plan can be written for QEMU later */
         }
-        if (ui.plan.mode == MODE_FREE && d && d->free_bytes &&
-            d->free_bytes < (unsigned long long)MIN_INSTALL_GB * 1000000000ULL) {
-            snprintf(err, n, "There is not enough free space. Shrink Windows first, or erase the disk.");
+        /* Free space (or custom sizes, which also keep what is there):
+           the helper refuses the same cases, this only says so sooner. */
+        const char *why = ui.plan.mode != MODE_ERASE && d
+            ? disks_free_problem(d, (unsigned long long)MIN_INSTALL_GB * 1000000000ULL) : NULL;
+        if (why) {
+            snprintf(err, n, "%s", why);
             return FALSE;
         }
     }
@@ -1550,8 +2028,9 @@ static gboolean helper_out(GIOChannel *ch, GIOCondition cond, gpointer unused)
 {
     char *line = NULL;
     gsize n = 0;
-    (void)cond, (void)unused;
-    while (g_io_channel_read_line(ch, &line, &n, NULL, NULL) == G_IO_STATUS_NORMAL && line) {
+    GIOStatus st;
+    (void)unused;
+    while ((st = g_io_channel_read_line(ch, &line, &n, NULL, NULL)) == G_IO_STATUS_NORMAL && line) {
         if (n && line[n - 1] == '\n')
             line[n - 1] = 0;
         if (!strncmp(line, "step ", 5))
@@ -1567,6 +2046,12 @@ static gboolean helper_out(GIOChannel *ch, GIOCondition cond, gpointer unused)
         g_free(line);
         line = NULL;
     }
+    g_free(line);
+    /* The helper has finished and closed its end: remove this watch. Kept
+       (TRUE), a closed pipe is "readable" for ever and the window spun at
+       100% CPU after every install (the MSI, 2026-10-10). */
+    if (st == G_IO_STATUS_EOF || st == G_IO_STATUS_ERROR || (cond & G_IO_ERR))
+        return FALSE;
     return TRUE;
 }
 
@@ -1618,7 +2103,7 @@ static void start_helper(void)
     {
         GIOChannel *ch = g_io_channel_unix_new(out);
         g_io_channel_set_flags(ch, G_IO_FLAG_NONBLOCK, NULL);
-        g_io_add_watch(ch, G_IO_IN | G_IO_HUP, helper_out, NULL);
+        g_io_add_watch(ch, G_IO_IN | G_IO_HUP | G_IO_ERR, helper_out, NULL);
         g_io_channel_unref(ch);
     }
     g_child_watch_add(pid, helper_done, NULL);
@@ -1641,12 +2126,14 @@ static void set_page(int page)
     snprintf(name, sizeof name, "%d", page);
     gtk_stack_set_visible_child_name(GTK_STACK(ui.stack), name);
     refresh_side();
+    char title[96];
+    snprintf(title, sizeof title, "Install MyOS \u2014 %s",
+             page == 3 || page == 4 ? "Disk & partitions" : STEPS[page]);
+    gtk_window_set_title(GTK_WINDOW(ui.window), title);
     gtk_widget_set_sensitive(ui.back, page > 0 && page < 7);
-    gtk_widget_set_visible(ui.extra, page == 4 || page == 8);
+    gtk_widget_set_visible(ui.extra, page == 8);    /* (the partition page has its own tools) */
     if (page == 2)
         gtk_widget_grab_focus(ui.tz_search);    /* type a city straight away */
-    if (page == 4)
-        gtk_button_set_label(GTK_BUTTON(ui.extra), "Edit partitions...");
     if (page == 8)
         gtk_button_set_label(GTK_BUTTON(ui.extra), "Keep trying MyOS");
     if (page == 6)
@@ -1725,8 +2212,6 @@ static void extra_clicked(GtkButton *b, gpointer unused)
         gtk_window_close(GTK_WINDOW(ui.window));
         return;
     }
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ui.mode_custom), TRUE);
-    gtk_widget_grab_focus(ui.root_spin);
 }
 
 static void fill_disks(void)
@@ -1739,10 +2224,7 @@ static void fill_disks(void)
         return;
     }
     for (int i = 0; i < ui.ndisk; i++) {
-        char sz[32], right[96];
-        disks_format_bytes(ui.disks[i].bytes, sz, sizeof sz);
-        snprintf(right, sizeof right, "%s   %s", sz, ui.disks[i].summary);
-        GtkListBoxRow *row = add_row(ui.disk_list, ui.disks[i].name, right, i);
+        GtkListBoxRow *row = add_disk_row(ui.disk_list, &ui.disks[i], i);
         if (ui.disks[i].in_use) {       /* shown, so it is clear why it isn't offered */
             gtk_list_box_row_set_selectable(row, FALSE);
             gtk_list_box_row_set_activatable(row, FALSE);
@@ -1751,9 +2233,13 @@ static void fill_disks(void)
             gtk_widget_set_tooltip_text(GTK_WIDGET(row),
                                         "MyOS is running from this disk, so it can't be erased.");
         }
-        if (ui.disk_sel < 0 && !ui.disks[i].in_use)
-            ui.disk_sel = i;
     }
+    /* The suggestion: the first internal disk that isn't in use (the SSD),
+       a removable one only when there is nothing else. */
+    for (int pass = 0; pass < 2 && ui.disk_sel < 0; pass++)
+        for (int i = 0; i < ui.ndisk && ui.disk_sel < 0; i++)
+            if (!ui.disks[i].in_use && (pass || !ui.disks[i].removable))
+                ui.disk_sel = i;
     if (ui.disk_sel >= 0)
         select_idx(ui.disk_list, ui.disk_sel);
 }
@@ -1809,10 +2295,15 @@ static int gtk_install(int argc, char **argv, const char *plan_path)
     gtk_widget_set_margin_top(side, S(20));
     gtk_box_pack_start(GTK_BOX(outer), side, FALSE, FALSE, 0);
     for (int i = 0; i < 9; i++) {
-        char t[64];
-        snprintf(t, sizeof t, "%d  %s", i + 1, STEPS[i]);
-        ui.step_lab[i] = label_new(t, "step", 0);
-        gtk_box_pack_start(GTK_BOX(side), ui.step_lab[i], FALSE, FALSE, 0);
+        ui.step_box[i] = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(10));
+        gtk_style_context_add_class(gtk_widget_get_style_context(ui.step_box[i]), "step");
+        ui.step_dot[i] = gtk_drawing_area_new();
+        gtk_widget_set_size_request(ui.step_dot[i], S(24), S(24));
+        g_signal_connect(ui.step_dot[i], "draw", G_CALLBACK(draw_step_dot), GINT_TO_POINTER(i));
+        ui.step_lab[i] = label_new(STEPS[i], NULL, 0);
+        gtk_box_pack_start(GTK_BOX(ui.step_box[i]), ui.step_dot[i], FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(ui.step_box[i]), ui.step_lab[i], TRUE, TRUE, 0);
+        gtk_box_pack_start(GTK_BOX(side), ui.step_box[i], FALSE, FALSE, 0);
     }
 
     right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -1824,6 +2315,7 @@ static int gtk_install(int argc, char **argv, const char *plan_path)
     ui.extra = gtk_button_new_with_label("Edit partitions...");
     ui.back = gtk_button_new_with_label("Back");
     ui.next = gtk_button_new_with_label("Next");
+    gtk_style_context_add_class(gtk_widget_get_style_context(ui.next), "next");
     gtk_box_pack_start(GTK_BOX(foot), ui.extra, FALSE, FALSE, 0);
     gtk_box_pack_end(GTK_BOX(foot), ui.next, FALSE, FALSE, 0);
     gtk_box_pack_end(GTK_BOX(foot), ui.back, FALSE, FALSE, 0);

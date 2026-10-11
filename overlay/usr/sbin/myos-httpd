@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # Enable or disable the live disk's static web server (darkhttpd).
 # It is installed off: this is the switch.
 PATH=/usr/sbin:/usr/bin:/sbin:/bin

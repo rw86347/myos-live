@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * icons.c — the toolbar's symbols, drawn the way Apple's SF Symbols look:
  * thin, round-ended strokes on a square of `size` pixels. Drawn rather than

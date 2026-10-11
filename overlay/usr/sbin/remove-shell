@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # remove-shell SHELL... — take shells out of /etc/shells (see add-shell).
 for s in "$@"; do
     grep -vxF "$s" /etc/shells > /etc/shells.new && cat /etc/shells.new > /etc/shells

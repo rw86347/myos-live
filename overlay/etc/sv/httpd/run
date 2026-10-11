@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # darkhttpd: static files from /var/www/html, port 80.
 # This service is not linked in /etc/runit/runsvdir/default; enable with
 #   doas myos-httpd enable

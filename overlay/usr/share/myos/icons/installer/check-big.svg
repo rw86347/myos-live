@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- The installer's "this one" mark beside the chosen disk. -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3cc07a"/>
+      <stop offset="1" stop-color="#1f8a4f"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="33" r="28" fill="#000" opacity="0.15"/>
+  <circle cx="32" cy="31" r="28" fill="url(#g)"/>
+  <circle cx="32" cy="31" r="28" fill="none" stroke="#ffffff" stroke-width="2.5" opacity="0.6"/>
+  <path d="M18 32 l9 9 l19 -20" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

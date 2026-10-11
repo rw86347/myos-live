@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # /etc/runit/3 — runit's stage 3: shut down. Stop the services (30 s each
 # to finish), then write everything to disk. runit then powers off, or
 # reboots if /etc/runit/reboot is executable.

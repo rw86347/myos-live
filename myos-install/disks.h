@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * Disks the kernel has published under /sys/block. Used by the window
  * (to list them) and by the helper (to check the plan's disk still exists
@@ -30,7 +32,9 @@ struct disk_info {
     unsigned long long free_bytes;
     int removable;
     int in_use;                 /* something is mounted from it: never the target */
-    int has_windows;
+    int running;                /* ...and that is "/": the live system itself */
+    int has_system;             /* an EFI partition and a large one: keep the ESP */
+    int has_windows;            /* ...and Windows' own partition names */
     int npart;
     struct disk_part parts[DISK_PARTS];
 };
@@ -42,5 +46,7 @@ void disks_suggest_hostname(char *out, size_t n, const char *user);
 int disks_wifi_ssid(char *out, size_t n);
 const struct disk_info *disks_find(const struct disk_info *list, int n, const char *path);
 void disks_part_path(const char *disk, int partno, char *out, size_t n);
+int disks_has_esp(const struct disk_info *d);
+const char *disks_free_problem(const struct disk_info *d, unsigned long long need);
 
 #endif

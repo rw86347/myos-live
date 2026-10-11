@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # Host keys for sshd. ssh-keygen -A writes only the types that are missing.
 mkdir -p /etc/ssh /var/empty
 if ! grep -q '^sshd:' /etc/passwd 2>/dev/null; then

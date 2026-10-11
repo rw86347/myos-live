@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * dialogs.c — Preview's dialogs, each laid out like the Mac's:
  * Export, Print, Adjust Size, Adjust Color, the Inspector, Settings, Go to

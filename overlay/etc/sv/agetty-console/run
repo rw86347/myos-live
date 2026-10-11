@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # A login prompt on the console: the screen and keyboard. (MyOS's kernel has
 # one terminal, /dev/console, so far; agetty-tty1 and agetty-ttyS0 are ready
 # for when it has virtual terminals and a serial device node.)

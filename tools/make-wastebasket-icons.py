@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 """make-wastebasket-icons.py — the Recycle Bin's two pictures, empty and
 full, from the photos in assets/themes/golden-hour/wastebasket-*-source.jpg
 (chosen by Rodger, 2026-10-08).

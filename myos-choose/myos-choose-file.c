@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * myos-choose-file — an Open panel for shell scripts: prints the chosen
  * file's path and exits 0, or exits 1 if it was cancelled.

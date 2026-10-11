@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # first-boot.sh — finish the install on MyOS's first boot (run by
 # /etc/runit/1), doing what tools/fetch-live.py could not do on the Mac:
 #

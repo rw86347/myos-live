@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Rodger Wilson */
 /*
  * myos-player — Player, in the manner of the Mac's QuickTime Player: a dark
  * window that is mostly the picture, and under it the controls — volume,

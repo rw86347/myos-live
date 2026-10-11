@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- A USB thumb drive: the installer's disk picker. Golden Hour palette. -->
+  <defs>
+    <linearGradient id="shell" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#36a3a8"/>
+      <stop offset="1" stop-color="#1a5c60"/>
+    </linearGradient>
+    <linearGradient id="metal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f6f8"/>
+      <stop offset="0.5" stop-color="#c9ced6"/>
+      <stop offset="1" stop-color="#9ba3ae"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="62" cy="96" rx="54" ry="6" fill="#000" opacity="0.18"/>
+  <rect x="84" y="46" width="38" height="36" rx="3" fill="url(#metal)"/>
+  <rect x="84" y="46" width="38" height="36" rx="3" fill="none" stroke="#7d8692" stroke-width="1.2"/>
+  <rect x="99" y="55" width="8" height="7" rx="1" fill="#4b5563"/>
+  <rect x="99" y="66" width="8" height="7" rx="1" fill="#4b5563"/>
+  <path d="M18 36 h60 a10 10 0 0 1 10 10 v36 a10 10 0 0 1 -10 10 h-60 a12 12 0 0 1 -12 -12 v-32 a12 12 0 0 1 12 -12 z"
+        fill="url(#shell)"/>
+  <circle cx="21" cy="64" r="6.5" fill="#f3e3c3"/>
+  <circle cx="21" cy="64" r="6.5" fill="none" stroke="#123f42" stroke-width="2"/>
+  <rect x="34" y="47" width="42" height="34" rx="5" fill="#efd3a0"/>
+  <rect x="40" y="55" width="30" height="4" rx="2" fill="#8a6a2e"/>
+  <rect x="40" y="64" width="20" height="3.5" rx="1.75" fill="#b48d48"/>
+  <rect x="14" y="39" width="66" height="6" rx="3" fill="#ffffff" opacity="0.18"/>
+  <circle cx="80" cy="86" r="2.6" fill="#3ddc84"/>
+</svg>

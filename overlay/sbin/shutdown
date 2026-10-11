@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # shutdown [-r | -h | -P] [now]: reboot or power off through runit
 # (runit-init 6 / 0 makes /etc/runit/reboot and stopit executable and wakes
 # process 1, which runs stage 3). Delays ("+5") aren't supported.

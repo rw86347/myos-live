@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
 # deluser — BusyBox's deluser syntax on top of shadow (see adduser).
 #
 #   deluser [--remove-home] USER     delete USER
