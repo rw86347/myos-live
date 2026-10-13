@@ -36,6 +36,7 @@
 #include <X11/cursorfont.h>
 #include <X11/keysym.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <grp.h>
 #include <pwd.h>
 #include <security/pam_appl.h>
@@ -43,6 +44,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/random.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -52,6 +55,8 @@
 #define ART     "/usr/share/myos/login"
 #define SESSION "/etc/myos/xsession"
 #define XSERVER "/usr/bin/X"
+#define XAUTH_DIR  "/run/myos-login"        /* root's alone (0700) */
+#define XAUTH_FILE XAUTH_DIR "/X0.auth"     /* the server's copy of the cookie */
 #define LOGIN_SERVICE "myos-login"
 
 #define DESIGN_H  768               /* the height the theme was drawn for */
@@ -523,6 +528,8 @@ static int conversation(int n, const struct pam_message **msg,
     return PAM_SUCCESS;
 }
 
+static int write_xauth(const char *path);      /* the X cookie (below) */
+
 /* Hand the screen to the user: their groups, their uid, their session.
    Returns how many seconds it lasted, when it has finished. */
 static long run_session(pam_handle_t *pamh, const struct passwd *pw, char **pamenv)
@@ -552,6 +559,16 @@ static long run_session(pam_handle_t *pamh, const struct passwd *pw, char **pame
            ip and the like are found without typing /sbin/. */
         setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 1);
         setenv("DISPLAY", ":0", 1);
+        /* The cookie, written as the user (their file, in their home; a
+           home we can't write gets a private file in /tmp instead). */
+        char xauth[512];
+        snprintf(xauth, sizeof xauth, "%s/.Xauthority", pw->pw_dir);
+        if (write_xauth(xauth) < 0) {
+            snprintf(xauth, sizeof xauth, "/tmp/.Xauthority-%u", (unsigned)pw->pw_uid);
+            if (write_xauth(xauth) < 0)
+                _exit(1);
+        }
+        setenv("XAUTHORITY", xauth, 1);
         execl("/bin/sh", "sh", SESSION, (char *)NULL);
         _exit(127);
     }
@@ -571,6 +588,13 @@ static int try_login(void)
     struct pam_conv conv = { conversation, NULL };
     pam_handle_t *pamh = NULL;
     ui.note = NULL;
+    /* pam_unix with nullok doesn't even ask an account with an empty
+       password: anything typed would let you in. Typing one means you
+       think there is a password, so a wrong guess shouldn't "work" (the
+       same rule as myos-adduser). Read again: one may have been set since. */
+    read_passwords();
+    if (!u->has_password && ui.passlen > 0)
+        return 0;
     if (pam_start(LOGIN_SERVICE, u->name, &conv, &pamh) != PAM_SUCCESS)
         return 0;
     pam_set_item(pamh, PAM_TTY, ":0");
@@ -604,16 +628,76 @@ static int try_login(void)
 
 /* --- the X server ----------------------------------------------------------------- */
 
+/*
+ * Who may talk to the X server. Without -auth, X lets in every local
+ * program of every user: read the keyboard (passwords typed into any
+ * window), take screenshots, type into windows. So, as Linux's display
+ * managers do: a random 16-byte cookie per server (MIT-MAGIC-COOKIE-1),
+ * in a file only root reads for the server and in the session user's
+ * ~/.Xauthority. libX11 sends it from $XAUTHORITY; nobody else has it.
+ * runit starts a new login screen, and so a new server and cookie, after
+ * every session: what a past session left running is locked out.
+ */
+static unsigned char cookie[16];
+
+/* One Xauthority entry, libXau's format (16-bit big-endian lengths):
+   family FamilyWild (any host name: the cookie stays good if the host is
+   renamed), display "0", MIT-MAGIC-COOKIE-1, the cookie. Written to a new
+   name, then renamed over `path`, so a reader never sees half of it, and
+   O_EXCL | O_NOFOLLOW so a planted symlink can't send it elsewhere. */
+static int write_xauth(const char *path)
+{
+    static const char name[] = "MIT-MAGIC-COOKIE-1";
+    unsigned char buf[64], *p = buf;
+    *p++ = 0xFF, *p++ = 0xFF;                       /* FamilyWild */
+    *p++ = 0, *p++ = 0;                             /* address: none */
+    *p++ = 0, *p++ = 1, *p++ = '0';                 /* display number "0" */
+    *p++ = 0, *p++ = sizeof name - 1;
+    memcpy(p, name, sizeof name - 1), p += sizeof name - 1;
+    *p++ = 0, *p++ = sizeof cookie;
+    memcpy(p, cookie, sizeof cookie), p += sizeof cookie;
+
+    char tmp[512];
+    if (snprintf(tmp, sizeof tmp, "%s-new", path) >= (int)sizeof tmp)
+        return -1;
+    unlink(tmp);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd < 0)
+        return -1;
+    int ok = write(fd, buf, (size_t)(p - buf)) == p - buf;
+    ok &= close(fd) == 0;
+    if (!ok || rename(tmp, path) < 0) {
+        unlink(tmp);
+        return -1;
+    }
+    return 0;
+}
+
+/* A new cookie, and the server's file. Exits if it can't: a server
+   without it would let everyone in. */
+static void make_cookie(void)
+{
+    struct stat st;
+    if (getrandom(cookie, sizeof cookie, 0) != (ssize_t)sizeof cookie)
+        die("getrandom");
+    mkdir(XAUTH_DIR, 0700);
+    if (lstat(XAUTH_DIR, &st) < 0 || !S_ISDIR(st.st_mode) || st.st_uid != 0 ||
+        chmod(XAUTH_DIR, 0700) < 0 || write_xauth(XAUTH_FILE) < 0)
+        die(XAUTH_FILE);
+    setenv("XAUTHORITY", XAUTH_FILE, 1);            /* for our own connection */
+}
+
 /* Start it and wait for it to answer. X tells its parent it is ready by
    sending SIGUSR1, but only if SIGUSR1 was ignored when it started; we
    simply knock on the door instead, which also covers a slow machine. */
 static void start_x(void)
 {
+    make_cookie();
     xpid = fork();
     if (xpid < 0)
         die("fork");
     if (xpid == 0) {
-        execl(XSERVER, "X", ":0", "vt7", "-nolisten", "tcp", "-nolock",
+        execl(XSERVER, "X", ":0", "vt7", "-auth", XAUTH_FILE, "-nolisten", "tcp", "-nolock",
               "-logfile", "/var/log/Xorg.0.log", (char *)NULL);
         _exit(127);
     }

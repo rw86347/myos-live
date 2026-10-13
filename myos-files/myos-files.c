@@ -40,6 +40,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/inotify.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
 #include <sys/statvfs.h>
@@ -49,6 +50,7 @@
 
 #include <gtk/gtk.h>
 #include <gdk/gdkx.h>
+#include <glib-unix.h>
 #include <librsvg/rsvg.h>
 #include <poppler.h>
 #include <X11/Xatom.h>
@@ -182,6 +184,7 @@ static int enabled(int a);
 
 static void reload(const char *keep);
 static void navigate(const char *path, int remember);
+static void watch_cwd(void);
 static void col_free_all(void);
 static void do_action(int a);
 static void join(char *out, size_t size, const char *dir, const char *name);
@@ -979,13 +982,47 @@ static void fmt_kind(const struct item *it, char *out, size_t size)
         snprintf(out, size, ext[0] ? "%s file" : "Binary file", ext);
 }
 
-/* Disks: "/" and every folder in it that is the top of another disk's
-   file system (ext2 or FAT). MyOS has no /proc/mounts to read. */
+/* /proc/mounts escapes a space in a path as \040 (and \t, \n, \\ the
+   same way): back to the characters, in place. */
+static void unescape_mount(char *s)
+{
+    char *o = s;
+    for (; *s; s++, o++) {
+        if (s[0] == '\\' && s[1] >= '0' && s[1] <= '3' && s[2] >= '0' && s[2] <= '7' &&
+            s[3] >= '0' && s[3] <= '7') {
+            *o = (char)((s[1] - '0') * 64 + (s[2] - '0') * 8 + (s[3] - '0'));
+            s += 3;
+        } else {
+            *o = *s;
+        }
+    }
+    *o = 0;
+}
+
+/* Disks: "/" and every other disk's file system (ext2/ext4 or FAT) that is
+   mounted, from /proc/mounts — /data, a USB stick at /mnt, wherever it is.
+   Without /proc (an old MyOS), the folders in "/" that are the top of
+   another disk, as before. */
 static void load_disks(void)
 {
     struct stat root;
     stat("/", &root);
     add_item("/", "disks", 1, 0, 0);
+    FILE *m = fopen("/proc/mounts", "re");
+    if (m) {
+        char line[1024];
+        while (fgets(line, sizeof line, m)) {
+            char src[PATH_MAX], dir[PATH_MAX], type[32];
+            if (sscanf(line, "%4095s %4095s %31s", src, dir, type) != 3)
+                continue;
+            unescape_mount(dir);
+            if (strcmp(dir, "/") && (!strcmp(type, "ext2") || !strcmp(type, "ext4") ||
+                                     !strcmp(type, "vfat")))
+                add_item(dir, "disks", 1, 0, 0);
+        }
+        fclose(m);
+        return;
+    }
     DIR *d = opendir("/");
     if (!d)
         return;
@@ -1019,6 +1056,7 @@ static void reload(const char *keep)
         struct stat st;
         dir_mtime = stat(cwd, &st) ? 0 : st.st_mtime;
     }
+    watch_cwd();
     if (k) {
         for (int i = 0; i < nitems; i++)
             if (!strcmp(items[i].name, k))
@@ -3485,10 +3523,77 @@ static void on_active(GObject *o, GParamSpec *p, gpointer d)
     redraw();
 }
 
-/* No inotify in MyOS yet, so look at the folder's time every 2 s. A file
-   made or removed in a terminal shows up; a file written over in place
-   needs F5. Stating every file here was the cost of the last version and
-   made the window hitch on QEMU. */
+/*
+ * Seeing changes made elsewhere (a terminal, another program): inotify
+ * on the folder shown. One watch, moved when the folder changes (from
+ * reload). Events wake us only when something happens, where looking
+ * every 2 s woke the program for nothing; and a file written over in
+ * place now shows too. A burst (rm -r, a copy of many files) is read at
+ * once and becomes one reload, 100 ms after it starts. Without inotify
+ * (an old kernel), the old way: the folder's time every 2 s.
+ */
+static int ino_fd = -1, ino_wd = -1;
+static char watched[PATH_MAX];
+static guint ino_later;
+
+static void watch_cwd(void)
+{
+    if (ino_fd < 0 || !strcmp(watched, cwd))
+        return;
+    if (ino_wd >= 0)
+        inotify_rm_watch(ino_fd, ino_wd);
+    ino_wd = -1;
+    snprintf(watched, sizeof watched, "%s", cwd);
+    if (strcmp(cwd, DISKS))
+        ino_wd = inotify_add_watch(ino_fd, cwd, IN_CREATE | IN_DELETE | IN_MOVED_FROM |
+                                   IN_MOVED_TO | IN_CLOSE_WRITE | IN_ATTRIB |
+                                   IN_DELETE_SELF | IN_MOVE_SELF | IN_ONLYDIR);
+}
+
+static gboolean reload_later(gpointer d)
+{
+    (void)d;
+    if (ren.on)
+        return G_SOURCE_CONTINUE;       /* a name is being typed: after that */
+    ino_later = 0;
+    struct stat st;
+    char up[PATH_MAX];
+    snprintf(up, sizeof up, "%s", cwd);
+    while (strcmp(up, "/") && (stat(up, &st) || !S_ISDIR(st.st_mode))) {
+        char *slash = strrchr(up, '/');  /* the folder went: its nearest parent */
+        if (slash == up)
+            slash[1] = 0;
+        else
+            *slash = 0;
+    }
+    if (strcmp(up, cwd))
+        navigate(up, 0);
+    else
+        reload(sel >= 0 ? items[sel].name : NULL);
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean on_inotify(gint fd, GIOCondition cond, gpointer d)
+{
+    (void)cond;
+    (void)d;
+    char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
+    int ours = 0;
+    ssize_t n;
+    while ((n = read(fd, buf, sizeof buf)) > 0)
+        for (char *p = buf; p < buf + n; ) {
+            const struct inotify_event *e = (const struct inotify_event *)p;
+            if (e->wd == ino_wd || (e->mask & IN_Q_OVERFLOW))
+                ours = 1;
+            p += sizeof *e + e->len;
+        }
+    if (ours && !ino_later)
+        ino_later = g_timeout_add(100, reload_later, NULL);
+    return G_SOURCE_CONTINUE;
+}
+
+/* The fallback, with no inotify: the folder's time every 2 s (a file
+   written over in place then needs F5). */
 static gboolean poll_dir(gpointer d)
 {
     (void)d;
@@ -3545,12 +3650,17 @@ int main(int argc, char **argv)
     g_signal_connect(win, "notify::is-active", G_CALLBACK(on_active), NULL);
     g_signal_connect(win, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
+    ino_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (ino_fd >= 0)
+        g_unix_fd_add(ino_fd, G_IO_IN, on_inotify, NULL);
+    else
+        g_timeout_add_seconds(2, poll_dir, NULL);
+
     const char *start = argc > 1 ? argv[1] : getenv("HOME");
     snprintf(cwd, sizeof cwd, "/");
     navigate(start && start[0] ? start : "/", 0);
     if (!strcmp(cwd, "/") && start && strcmp(start, "/"))
         navigate("/", 0);
-    g_timeout_add_seconds(2, poll_dir, NULL);
 
     gtk_widget_show_all(win);
     gtk_widget_grab_focus(da);

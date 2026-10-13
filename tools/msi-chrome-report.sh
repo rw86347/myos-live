@@ -46,7 +46,7 @@ ls -la ~/.config/chromium/Singleton* 2>&1
 echo "== kernel log before"
 dmesg | tail -25
 echo "== 1. a window on the MSI's screen, as the Start menu starts it (60 s)"
-( cd ~ && DISPLAY=:0 timeout -k 5 60 setsid sh -c chromium > /tmp/c-win.log 2>&1 )
+( cd ~ && DISPLAY=:0 XAUTHORITY="$HOME/.Xauthority" timeout -k 5 60 setsid sh -c chromium > /tmp/c-win.log 2>&1 )
 echo "exit=$?   (124: it was still running at 60 s, good; 133/139/134: it crashed)"
 echo "-- its log, without the usual noise:"
 grep -aEv "$F" /tmp/c-win.log | tail -40

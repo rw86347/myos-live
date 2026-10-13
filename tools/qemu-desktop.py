@@ -215,7 +215,9 @@ def guest(cmd, out_path=None, timeout=120):
         p = subprocess.Popen(['ssh', '-i', key_file, '-p', str(SSH), '-o', 'IdentitiesOnly=yes',
                               '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
                               '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null',
-                              '-o', 'LogLevel=ERROR', ssh_user + '@127.0.0.1', cmd],
+                              '-o', 'LogLevel=ERROR', ssh_user + '@127.0.0.1',
+                              # X wants the session's cookie (myos-login writes it)
+                              'export XAUTHORITY="$HOME/.Xauthority"; ' + cmd],
                              stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
         end = time.time() + timeout
         while p.poll() is None:

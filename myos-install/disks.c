@@ -349,7 +349,7 @@ int disks_scan(struct disk_info *out, int max)
         d->has_windows = d->has_system && win_named;
         if (d->in_use && (d->running || nmounted < 0))
             snprintf(d->summary, sizeof d->summary, "MyOS is running from this disk");
-        else if (d->in_use)             /* an earlier try mounted it; nothing unmounts yet */
+        else if (d->in_use)             /* mounted: by hand, or a try that couldn't unmount */
             snprintf(d->summary, sizeof d->summary, "in use: restart the computer to install here");
         else if (d->has_windows)
             snprintf(d->summary, sizeof d->summary, "Windows likely");

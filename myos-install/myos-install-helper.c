@@ -36,8 +36,9 @@
  *   configure    the account, computer name, language, keyboard, clock; the
  *                live user, the stick's ssh keys and the installer removed.
  *   finish       everything written to the disk.
- * Nothing unmounts yet (WORKLIST: umount), so a failed try leaves the disk
- * mounted: the window then says to restart before trying again.
+ * Its mounts come off again at the end (unmount_all), so the new system
+ * starts with its file systems marked cleanly unmounted, and after a failed
+ * try the next one needs no restart.
  */
 #include <crypt.h>
 #include <ctype.h>
@@ -69,6 +70,12 @@
 #define ESP_NAME    "EFI System"
 #define GPT_ESP     "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
 #define GPT_LINUX   "0FC63DAF-8483-4772-8E79-3D69D8477DE4"
+/* The kernel config (docs/KERNEL-CONFIG.md §8): MyOS's own type, 1 MiB,
+   right after myos-root. Settings › Kernel writes it; the kernel reads it
+   at boot from the root's disk. */
+#define GPT_MYOS_CONFIG "9390AFB2-C545-487E-AF50-3648E56B736C"
+#define CONFIG_MIB  1
+#define CONFIG_USED (42 * 512)          /* both copies: sectors 0-41 */
 #define GB          1000000000ULL       /* the window's sizes are in GB, as disks are sold */
 #define MIB         1048576ULL
 
@@ -82,7 +89,7 @@ static struct layout {
     int erase;                          /* a new table, or --append to the old one */
     unsigned long long before[DISK_PARTS];  /* start sectors that were already there */
     int nbefore;
-    char esp[64], root[64], datadev[64];    /* found after sfdisk, by GPT name */
+    char esp[64], root[64], datadev[64], config[64];   /* found after sfdisk, by GPT name */
 } L;
 
 static void logline(const char *fmt, ...)
@@ -370,16 +377,16 @@ static int check_layout(const struct install_plan *p)
         return fail("The disk is too small: MyOS needs %d GB. Nothing was written.",
                     MIN_INSTALL_GB + ESP_MIB / 1000 + 1);
     root = (unsigned long long)p->root_gb * GB;
-    if (root > pool - esp)
-        root = pool - esp;
+    if (root > pool - esp - CONFIG_MIB * MIB)
+        root = pool - esp - CONFIG_MIB * MIB;
     L.root_mib = root / MIB;
     /* myos-data gets the rest, if that is worth a partition (1 GB). */
-    L.data = p->separate_home && pool - esp - L.root_mib * MIB >= GB;
+    L.data = p->separate_home && pool - esp - (L.root_mib + CONFIG_MIB) * MIB >= GB;
     if (p->separate_home && !L.data)
         logline("no room for myos-data: /home stays on myos-root");
-    logline("layout on %s (%s): %s; EFI %d MiB, myos-root %llu MiB%s", p->disk, d->name,
-            L.erase ? "new partition table" : "added in the free space", ESP_MIB, L.root_mib,
-            L.data ? ", myos-data the rest" : "");
+    logline("layout on %s (%s): %s; EFI %d MiB, myos-root %llu MiB, myos-config %d MiB%s",
+            p->disk, d->name, L.erase ? "new partition table" : "added in the free space",
+            ESP_MIB, L.root_mib, CONFIG_MIB, L.data ? ", myos-data the rest" : "");
     return 0;
 }
 
@@ -402,18 +409,34 @@ static int find_new_parts(const struct install_plan *p)
             continue;
         char *slot = !strcmp(q->label, ESP_NAME) ? L.esp
                    : !strcmp(q->label, "myos-root") ? L.root
+                   : !strcmp(q->label, "myos-config") ? L.config
                    : !strcmp(q->label, "myos-data") ? L.datadev : NULL;
         if (slot && !slot[0])
             snprintf(slot, sizeof L.esp, "/dev/%s", q->name);
     }
-    if (!L.esp[0] || !L.root[0] || (L.data && !L.datadev[0]))
+    if (!L.esp[0] || !L.root[0] || !L.config[0] || (L.data && !L.datadev[0]))
         return fail("The new partitions didn't appear on %s (the kernel didn't read the new table).",
                     p->disk);
-    if (!is_block(L.esp) || !is_block(L.root) || (L.data && !is_block(L.datadev)))
+    if (!is_block(L.esp) || !is_block(L.root) || !is_block(L.config) ||
+        (L.data && !is_block(L.datadev)))
         return fail("The new partitions have no /dev files.");
-    logline("new: EFI %s, myos-root %s%s%s", L.esp, L.root, L.data ? ", myos-data " : "",
-            L.data ? L.datadev : "");
+    logline("new: EFI %s, myos-root %s, myos-config %s%s%s", L.esp, L.root, L.config,
+            L.data ? ", myos-data " : "", L.data ? L.datadev : "");
     return 0;
+}
+
+/* The config partition starts empty ("nothing saved": the kernel keeps its
+   built-in config). Whatever the disk held there before is cleared, so a
+   reinstall can't pick up an old system's settings by accident. */
+static int clear_config(void)
+{
+    static const char zero[CONFIG_USED];
+    int fd = open(L.config, O_WRONLY | O_CLOEXEC);
+    int ok = fd >= 0 && write(fd, zero, sizeof zero) == (ssize_t)sizeof zero && fsync(fd) == 0;
+    if (fd >= 0)
+        close(fd);
+    return ok ? 0 : fail("Can't clear the new myos-config partition %s (%s).", L.config,
+                         strerror(errno));
 }
 
 static int step_partition(const struct install_plan *p)
@@ -428,9 +451,10 @@ static int step_partition(const struct install_plan *p)
              "%s"
              "size=%dMiB, type=" GPT_ESP ", name=\"" ESP_NAME "\"\n"
              "size=%lluMiB, type=" GPT_LINUX ", name=myos-root\n"
+             "size=%dMiB, type=" GPT_MYOS_CONFIG ", name=myos-config\n"
              "%s",
              L.erase ? "label: gpt\n" : "",
-             ESP_MIB, L.root_mib,
+             ESP_MIB, L.root_mib, CONFIG_MIB,
              L.data ? "type=" GPT_LINUX ", name=myos-data\n" : "");
     logline("sfdisk script for %s:\n%s", p->disk, script);
     {
@@ -451,7 +475,7 @@ static int step_partition(const struct install_plan *p)
     if (rc)
         return fail("The kernel couldn't read the new partition table (%s). Restart the computer "
                     "and install again.", strerror(errno));
-    return find_new_parts(p);
+    return find_new_parts(p) || clear_config();
 }
 
 static int mke2fs(const char *dev, const char *label, const char *ratio)
@@ -907,16 +931,32 @@ static int step_configure(const struct install_plan *p)
     return 0;
 }
 
+/* Take our mounts off, innermost first. One that isn't mounted (an earlier
+   step never got that far) is fine; one still in use is logged and stays. */
+static void unmount_all(void)
+{
+    static const char *const at[] = { NEWROOT "/data", NEWROOT, LIVE_ESP, NULL };
+    for (int k = 0; at[k]; k++) {
+        if (umount2(at[k], 0) == 0)
+            logline("unmounted %s", at[k]);
+        else if (errno != EINVAL && errno != ENOENT)
+            logline("can't unmount %s: %s", at[k], strerror(errno));
+    }
+}
+
 static int step_finish(const struct install_plan *p)
 {
     step("finish");
     say("progress 96");
     say("file writing everything to the disk");
-    /* MyOS's sync also flushes each written drive's own cache (bsync). */
-    logline("sync (the new disk stays mounted until restart)");
+    /* MyOS's sync also flushes each written drive's own cache (bsync);
+       the unmount then marks the new ext2 file systems clean. */
+    logline("sync, then unmount");
     (void)p;
-    if (apply)
+    if (apply) {
         sync();
+        unmount_all();
+    }
     say("progress 100");
     return 0;
 }
@@ -926,8 +966,11 @@ static int run_plan(const struct install_plan *p)
     if (check_layout(p))
         return 2;
     if (step_partition(p) || step_filesystems(p) || step_boot(p) || step_copy(p) ||
-        step_configure(p) || step_finish(p))
+        step_configure(p) || step_finish(p)) {
+        if (apply)
+            unmount_all();              /* so another try needs no restart */
         return 3;
+    }
     step("done");
     say("ok");
     logline("ok: MyOS is installed on %s", p->disk);

@@ -1632,7 +1632,9 @@ static void destroy_child(GtkWidget *w, gpointer unused);
    of cards, one per saving this computer has. Save checks everything
    (kconfig.c), then /usr/libexec/myos-kconfig (setuid root) checks the
    administrator's password and the config again and writes it to the
-   myos-config partition. The kernel doesn't read it yet: the page says so. */
+   myos-config partition. The kernel reads it at the next start and gives
+   the slots to the tasks named here; the modes, starting the programs and
+   the power savings come later: the page says so. */
 #define KCONFIG_HELPER "/usr/libexec/myos-kconfig"
 
 static struct kc_config kc;             /* what the page shows */
@@ -2441,8 +2443,9 @@ static void k_load(void)
 static void k_show_badge(void)
 {
     char t[400];
-    snprintf(t, sizeof t, "%s%s\nPreview: Save writes these settings to the disk, but this kernel doesn't read them "
-             "yet (docs/KERNEL-CONFIG.md, steps 2–5).", kc_badge_text,
+    snprintf(t, sizeof t, "%s%s\nTakes effect at the next start: the slots go to the tasks named here. "
+             "The modes, starting the programs and the power savings come later "
+             "(docs/KERNEL-CONFIG.md §10).", kc_badge_text,
              kc_cleared ? " Savings this computer lacks were switched off." : "");
     gtk_label_set_text(GTK_LABEL(k_badge), t);
 }
