@@ -1,0 +1,14 @@
+#!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
+# socklog-unix: the system log. Reads /dev/log, where syslog(3) sends its
+# messages (login and PAM, sshd, doas, ...), and prints each one, with its
+# facility and priority, for the log service below (log/run). It binds the
+# socket as root, then runs as nobody (chpst -U sets $UID and $GID, and
+# socklog drops to them once the socket is there).
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+# Not installed (an image built from an older package lock): wait quietly
+# instead of failing, and being restarted, every second.
+[ -x /sbin/socklog ] || exec sleep 2147483647
+exec 2>&1
+exec chpst -Unobody socklog unix /dev/log

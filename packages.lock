@@ -1,7 +1,7 @@
 # packages.lock — written by tools/fetch-live.py --update; do not edit.
 # Every package on the live disk, in install order, with the SHA-256 of
 # its .apk. The build refuses any download that doesn't match.
-world 678a482487d836e5983e5607921b83463afe84b7ddeaa600d3f4e3c96d370fd9
+world 5a5cec8b1ea12f6bad51d5f0a9040fffb03f4a60d9e0d343d33541fafde14baa
 # group      package                          version              repo       sha256
 base         alpine-baselayout-data           3.6.5-r0             main       bbe2d06925bd6e6d8f540f601777f8123e50ea4b25727d2fcb5df5776eddf591
 base         musl                             1.2.5-r3             main       7e56fb578429d6c493c3cc07a7390635a5d76dcc6e38c74fbec9279b2d68ab63
@@ -80,6 +80,7 @@ base         iproute2-ss                      6.9.0-r0             main       62
 base         iproute2                         6.9.0-r0             main       8adf8cd0e4c974bfe7bf5dec7307d8e3823e67f29054e7041e0dfa738b066dc2
 base         iputils-ping                     20240117-r0          main       58e130fdc595457bb5962740e44fbb70a8509628fba58ac95952387819a10962
 init         runit                            2.1.2-r7             community  9cf6c9a8e3a2d2ae8909ee7f70e7902dc748a2cf07926912b6ce274acea82c17
+init         socklog                          2.1.0-r3             community  b467746f21d2d2e982a27e368f9b609bc09e4e34188b0fab07bb3df6a9fdc1c3
 init         agetty                           2.40.1-r1            main       d332ee76de9b290197d6762e4de095394b3c44d642b0cd299255cd5f29d0c340
 init         linux-pam                        1.6.0-r0             main       2a946d2fbefffdf99772ec7eba01653c536db4ce178ef12e22ef7318b7244ee1
 init         runuser                          2.40.1-r1            main       7b6a0d5a9e6ad5eb1ddfc8d5616e37dece617f78f708bc98796efb7d89cbb4e1

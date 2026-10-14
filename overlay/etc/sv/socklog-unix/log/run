@@ -1,0 +1,12 @@
+#!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
+# svlogd (runit's) writes what socklog-unix prints to
+# /var/log/socklog/current, each line with its time (UTC). At 1 MB it starts
+# a new file and keeps the newest 10 (the config file): never more than
+# 10 MB. Only root may read it: login failures are in there.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+mkdir -p /var/log/socklog
+chmod 700 /var/log/socklog
+[ -f /var/log/socklog/config ] || printf 's1000000\nn10\n' > /var/log/socklog/config
+exec svlogd -tt /var/log/socklog

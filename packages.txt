@@ -75,7 +75,12 @@ iputils-ping
 # sshd is supervised like agetty (live/overlay/etc/sv/sshd). The client is
 # also in [dev]. Host keys are made on first boot. Incoming TCP still needs
 # the kernel's listen/accept (docs/gaps.md).
+# socklog (31 KB) is the system log, the runit way: it reads /dev/log, where
+# login, PAM and the daemons send their messages (syslog(3)), and runit's own
+# svlogd writes them to /var/log/socklog, rotating its files so the log can't
+# fill the disk (live/overlay/etc/sv/socklog-unix).
 runit
+socklog
 agetty
 util-linux-login
 shadow
