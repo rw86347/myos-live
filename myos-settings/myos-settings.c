@@ -566,22 +566,33 @@ static GtkWidget *status_dot(int up)
 }
 
 /* --- Wi-Fi ------------------------------------------------------------------------------
-   MyOS has no Wi-Fi driver yet (ROADMAP: WiFi comes last), so this pane
-   shows where Wi-Fi will be and says so. A Linux kernel lists its wireless
-   cards in /proc/net/wireless (two header lines, then "wlan0: ..."); the
-   first one found is named, so the pane is right the day a driver lands. */
-static int wifi_card(char *out, size_t size)
+   The kernel lists its Wi-Fi cards in /proc/net/wireless, as Linux does: two
+   header lines, then one per card, "wlan0: 0000   60.  -50.  -256 ...". While
+   the card is connected, the link quality (0-70) and the signal in dBm come
+   marked with a '.'. Choosing a network is the Wi-Fi icon's job, in the
+   panel (myos-wifi, through wpa_supplicant); this pane says what there is. */
+struct wifi_state {
+    char card[32];
+    int connected, quality, dbm;
+};
+
+static int wifi_card(struct wifi_state *w)
 {
     char line[256];
     int n = 0, found = 0;
+    memset(w, 0, sizeof *w);
     FILE *f = fopen("/proc/net/wireless", "r");
     if (!f)
         return 0;
     while (!found && fgets(line, sizeof line, f))
         if (++n > 2 && strchr(line, ':')) {
-            char *p = line + strspn(line, " ");
-            p[strcspn(p, ":")] = 0;
-            snprintf(out, size, "%s", p);
+            char *p = line + strspn(line, " "), *colon = strchr(p, ':');
+            unsigned status;
+            char qmark = ' ', lmark = ' ';
+            *colon = 0;
+            snprintf(w->card, sizeof w->card, "%s", p);
+            w->connected = sscanf(colon + 1, " %x %d%c %d%c", &status, &w->quality, &qmark,
+                                  &w->dbm, &lmark) == 5 && qmark == '.';
             found = 1;
         }
     fclose(f);
@@ -590,24 +601,21 @@ static int wifi_card(char *out, size_t size)
 
 static void page_wifi(GtkWidget *page)
 {
-    char card[32], *s;
-    int have = wifi_card(card, sizeof card);
-    GtkWidget *sw = gtk_switch_new();
-    gtk_switch_set_active(GTK_SWITCH(sw), FALSE);
-    gtk_widget_set_sensitive(sw, FALSE);
-    gtk_widget_set_valign(sw, GTK_ALIGN_CENTER);
+    struct wifi_state w;
+    int have = wifi_card(&w);
+    char *s = !have ? g_strdup("No Wi-Fi hardware found")
+            : w.connected ? g_strdup_printf("%s: signal %d%% (%d dBm)", w.card,
+                                            w.quality * 100 / 70, w.dbm)
+            : g_strdup_printf("%s", w.card);
     GtkWidget *g = group_new(page, NULL);
-    s = have ? g_strdup_printf("%s found; MyOS can't drive it yet", card) : g_strdup("No Wi-Fi hardware found");
-    row_link(g, IC_WIFI, "Wi-Fi", s, sw, NULL);
+    row_link(g, IC_WIFI, "Wi-Fi", s,
+             have ? status_dot(w.connected) : label_new("Not available", "value", 1), NULL);
     g_free(s);
-    g = group_new(page, "Known Networks");
-    row_add(g, label_new("None", "value", 0));
-    g = group_new(page, "Other Networks");
-    row_add(g, label_new("Wi-Fi is off.", "value", 0));
-    gtk_box_pack_start(GTK_BOX(page),
-                       label_new("MyOS has no Wi-Fi drivers yet, so Wi-Fi can't be turned on. "
-                                 "Ethernet works: see Network.", "footnote", 0),
-                       FALSE, FALSE, 0);
+    if (have)
+        gtk_box_pack_start(GTK_BOX(page),
+                           label_new("To choose a network, click the Wi-Fi icon in the panel.",
+                                     "footnote", 0),
+                           FALSE, FALSE, 0);
 }
 
 static void page_network(GtkWidget *page)
@@ -616,7 +624,10 @@ static void page_network(GtkWidget *page)
     int up = our_address(ip, sizeof ip);
     GtkWidget *g = group_new(page, NULL);
     row_link(g, IC_ETHERNET, "Ethernet", NULL, status_dot(up), "ethernet");
-    row_link(g, IC_WIFI, "Wi-Fi", NULL, label_new("Not available", "value", 1), "wifi");
+    struct wifi_state w;
+    row_link(g, IC_WIFI, "Wi-Fi", NULL,
+             wifi_card(&w) ? status_dot(w.connected) : label_new("Not available", "value", 1),
+             "wifi");
 }
 
 static void page_ethernet(GtkWidget *page)
