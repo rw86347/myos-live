@@ -26,8 +26,7 @@
  * the user tiles, so typing never touches the photograph again. The tile of
  * the selected user (a translucent panel over the photograph) is composed
  * once per user too. Imlib2 only ever decodes the pictures here: the pixels
- * go to the server through XPutImage, because MyOS has no shared memory
- * (see live/overlay/etc/X11/xorg.conf.d/10-myos.conf).
+ * go to the server through XPutImage (live/common/xpic.h), once.
  */
 #include <Imlib2.h>
 #include <X11/Xft/Xft.h>
@@ -237,40 +236,63 @@ static void gold_line(uint32_t *px, int w, int h, int y, int thick)
     }
 }
 
-/* Is (x,y) inside a rectangle with rounded corners? Used for both the
-   panel's edge and its border, so the two always agree. */
-static double corner_dist(int x, int y, int rw, int rh, double r)
+/* How far (x,y) is from the centre of its rounded corner, squared: 0 away
+   from the four r x r corner squares, where the rectangle is straight.
+   Used for both the panel's edge and its border, so the two always agree.
+   Squared, so no square root: these ran one per pixel of each tile, 0.27 s
+   of the login screen's start in QEMU, where floating point is slow. */
+static double corner_d2(int x, int y, int rw, int rh, double r)
 {
     double cx = x < r ? r : (x > rw - 1 - r ? rw - 1 - r : x);
     double cy = y < r ? r : (y > rh - 1 - r ? rh - 1 - r : y);
     double dx = x - cx, dy = y - cy;
-    double d = dx * dx + dy * dy;
-    return d > 0 ? __builtin_sqrt(d) : 0;
+    return dx * dx + dy * dy;
+}
+
+/* The width of the edge where a border or a rounded corner can be: the
+   inside of the rectangle is skipped (nothing is drawn or cleared there). */
+static int edge_band(double r, double thick)
+{
+    return (int)(r > thick ? r : thick) + 1;
 }
 
 static void rounded_border(uint32_t *px, int w, int h, int x, int y, int rw, int rh,
                            double r, double thick, uint32_t rgb)
 {
-    for (int j = 0; j < rh; j++)
+    int band = edge_band(r, thick);
+    double rt = r - thick;                  /* inside this: not the border */
+    for (int j = 0; j < rh; j++) {
+        int whole_row = rt < 0 || j < band || j >= rh - band;  /* (rt < 0: all border) */
         for (int i = 0; i < rw; i++) {
-            double d = corner_dist(i, j, rw, rh, r);
+            if (!whole_row && i == band && rw - band > band)
+                i = rw - band;              /* the inside: nothing to draw */
+            double d2 = corner_d2(i, j, rw, rh, r);
             int edge = i < thick || j < thick || i >= rw - thick || j >= rh - thick;
-            if (d > r)
+            if (d2 > r * r)
                 continue;                   /* outside the rounded corner */
-            if (d > r - thick || (d < 0.5 && edge))
+            if (rt < 0 || d2 > rt * rt || (d2 < 0.25 && edge))
                 blend(px, w, h, x + i, y + j, rgb, 255);
         }
+    }
 }
 
 /* Clear the pixels outside the rounded rectangle back to what `under`
-   holds there: the panel must not have square corners. */
+   holds there: the panel must not have square corners. Only the corner
+   squares can be outside it. */
 static void round_corners(uint32_t *px, const uint32_t *under, int w,
                           int x, int y, int rw, int rh, double r)
 {
-    for (int j = 0; j < rh; j++)
-        for (int i = 0; i < rw; i++)
-            if (corner_dist(i, j, rw, rh, r) > r)
+    int band = edge_band(r, 0);
+    for (int j = 0; j < rh; j++) {
+        if (j >= band && j < rh - band)
+            continue;                       /* no corner in this row */
+        for (int i = 0; i < rw; i++) {
+            if (i == band && rw - band > band)
+                i = rw - band;
+            if (corner_d2(i, j, rw, rh, r) > r * r)
                 px[(y + j) * w + x + i] = under[(y + j) * w + x + i];
+        }
+    }
 }
 
 /* An icon from the theme, blended in at the size asked for. */
@@ -777,6 +799,17 @@ static void say(const char *what)
     }
 }
 
+/* How long the start took, for the "is up" line (the boot clock):
+   milliseconds since main started. */
+static struct timespec t_main;
+static long ms_since_main(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (t.tv_sec - t_main.tv_sec) * 1000 + (t.tv_nsec - t_main.tv_nsec) / 1000000;
+}
+static long ms_x_up, ms_built;
+
 static void event_loop(void)
 {
     int shown = 0;
@@ -788,8 +821,13 @@ static void event_loop(void)
             /* Say so once it is on the screen and takes keys: on a machine
                with no serial port it is the last line before the picture,
                and the desktop test waits for it before pressing Enter. */
-            if (!shown++)
-                say("the login screen is up");
+            if (!shown++) {
+                char line[96];
+                snprintf(line, sizeof line, "the login screen is up (X answered at %ld ms, "
+                         "the picture took %ld ms, shown at %ld ms)", ms_x_up,
+                         ms_built - ms_x_up, ms_since_main());
+                say(line);
+            }
         } else if (ev.type == ButtonPress) {
             int n = hit(ev.xbutton.x, ev.xbutton.y);
             if (n == -2) {
@@ -846,8 +884,10 @@ int main(void)
         return 1;
     }
     signal(SIGCHLD, SIG_DFL);
+    clock_gettime(CLOCK_MONOTONIC, &t_main);
     start_x();
     open_window();
+    ms_x_up = ms_since_main();
 
     /* The sizes the theme drew with (assets/themes/golden-hour). */
     ui.f_logo = font("DejaVu Sans:bold:italic", 54);
@@ -861,6 +901,7 @@ int main(void)
     build_background();
     build_tiles();
     build_still();
+    ms_built = ms_since_main();
     XSetInputFocus(ui.dpy, ui.win, RevertToPointerRoot, CurrentTime);
     redraw();
     event_loop();

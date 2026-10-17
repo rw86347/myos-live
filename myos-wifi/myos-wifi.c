@@ -369,11 +369,27 @@ static void draw_lock(cairo_t *cr, double x, double y, double s)
 static GtkStatusIcon *icon;
 static int icon_size = 16;
 static int frame;                       /* (the "connecting" animation) */
+static guint anim_id;                   /* its 300 ms timer, only while connecting */
+static gboolean anim(gpointer data);
 
 /* The tray picture for the state now. */
 static void update_icon(void)
 {
     int s = icon_size;
+    if (state == ST_CONNECTING && !anim_id)
+        anim_id = g_timeout_add(300, anim, NULL);   /* it stops itself (anim) */
+    /* Only when the picture or its tip would change: every new picture goes
+       to the X server and makes the panel repaint its tray, and the 5 s
+       refresh mostly finds everything as it was. */
+    static int last_size = -1, last_state = -1, last_look = -1, last_sec = -1;
+    static char last_shown[sizeof cur_shown];
+    int look = state == ST_CONNECTED ? bars_for(cur_level) : state == ST_CONNECTING ? frame % 5
+             : state == ST_IDLE ? n_nets > 0 : 0;
+    if (s == last_size && (int)state == last_state && look == last_look &&
+        (int)cur_sec == last_sec && !strcmp(cur_shown, last_shown))
+        return;
+    last_size = s, last_state = (int)state, last_look = look, last_sec = (int)cur_sec;
+    memcpy(last_shown, cur_shown, sizeof last_shown);
     cairo_surface_t *sf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, s, s);
     cairo_t *cr = cairo_create(sf);
     double m = s / 8.0;
@@ -817,10 +833,12 @@ static gboolean tick(gpointer data)
 static gboolean anim(gpointer data)
 {
     (void)data;
-    if (state == ST_CONNECTING) {
-        frame++;
-        update_icon();
+    if (state != ST_CONNECTING) {
+        anim_id = 0;                    /* until the next connection (update_icon) */
+        return G_SOURCE_REMOVE;
     }
+    frame++;
+    update_icon();
     return G_SOURCE_CONTINUE;
 }
 
@@ -1015,7 +1033,6 @@ int main(int argc, char **argv)
     make_popup();
     refresh();
     g_timeout_add_seconds(5, tick, NULL);
-    g_timeout_add(300, anim, NULL);
     g_unix_signal_add(SIGTERM, on_quit, NULL);
     g_unix_signal_add(SIGINT, on_quit, NULL);
     if (argc > 1 && !strcmp(argv[1], "--open"))

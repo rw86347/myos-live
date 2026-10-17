@@ -12,14 +12,28 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 # wlan0's interface number, or nothing if there is no wlan0.
 ifindex() { iw dev wlan0 info 2>/dev/null | sed -n 's/.*ifindex \([0-9]*\).*/\1/p'; }
 
+# Is there a wlan0? The kernel lists its Wi-Fi interfaces in
+# /proc/net/wireless ("  wlan0: 0000 ..."); the shell's own `read` looks
+# without starting a program (iw and sed are two program starts a look).
+have_wlan0() {
+    [ -r /proc/net/wireless ] || return 1
+    while read -r name rest; do
+        [ "$name" = "wlan0:" ] && return 0
+    done < /proc/net/wireless
+    return 1
+}
+
 # No wireless interface yet: the driver loads its firmware in the
-# background at boot, and a machine may have no Wi-Fi at all. Look again
-# in a few seconds (runit starts us again when we exit).
+# background at boot, and a machine may have no Wi-Fi at all. Look every
+# 5 s while the machine starts, then once a minute: a machine with no
+# Wi-Fi card mustn't start programs every few seconds for ever (this used
+# to exit and be restarted by runit every 5 s: four program starts).
+until have_wlan0; do
+    read -r up rest < /proc/uptime
+    if [ "${up%%.*}" -lt 120 ]; then sleep 5; else sleep 60; fi
+done
 first=$(ifindex)
-if [ -z "$first" ]; then
-    sleep 5
-    exit 1
-fi
+[ -n "$first" ] || exit 1
 mkdir -p /var/log
 wpa_supplicant -i wlan0 -D nl80211 -c /etc/wpa_supplicant/wpa_supplicant.conf \
     >> /var/log/wpa_supplicant.log 2>&1 &
@@ -27,9 +41,10 @@ pid=$!
 trap 'kill $pid 2>/dev/null; wait $pid; exit 0' TERM INT
 # After repeated firmware errors iwlwifi resets the card and makes a new
 # wlan0 (another interface number); wpa_supplicant would stay with the old
-# one, which is gone. Start over then.
+# one, which is gone. Start over then. Every 30 s: each look is three
+# program starts (sleep, iw, sed), and the reset is rare.
 while kill -0 $pid 2>/dev/null; do
-    sleep 5
+    sleep 30
     if [ "$(ifindex)" != "$first" ]; then
         echo "wpa_supplicant: wlan0 was made again: starting over" >> /var/log/wpa_supplicant.log
         kill $pid 2>/dev/null

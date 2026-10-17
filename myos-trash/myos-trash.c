@@ -329,6 +329,15 @@ static gboolean poll_full(gpointer d)
     return G_SOURCE_CONTINUE;
 }
 
+/* Something went into or out of the trash: the kernel says so (inotify,
+   through GIO's file monitor), so nothing has to look every few seconds. */
+static void on_trash_changed(GFileMonitor *m, GFile *f, GFile *other, GFileMonitorEvent ev,
+                             gpointer d)
+{
+    (void)m, (void)f, (void)other, (void)ev;
+    poll_full(d);
+}
+
 /* The root window's picture appeared or changed: paint again. */
 static GdkFilterReturn root_filter(GdkXEvent *xev, GdkEvent *event, gpointer data)
 {
@@ -382,7 +391,16 @@ int main(int argc, char **argv)
     desk_type();
     place();
     full = trash_count() > 0;
-    g_timeout_add_seconds(2, poll_full, NULL);
+    char dir[PATH_MAX];
+    trash_path(dir, sizeof dir);
+    mkdir(dir, 0700);                   /* (GIO polls a folder that isn't there yet) */
+    GFile *tf = g_file_new_for_path(dir);
+    GFileMonitor *mon = g_file_monitor_directory(tf, G_FILE_MONITOR_NONE, NULL, NULL);
+    g_object_unref(tf);
+    if (mon)
+        g_signal_connect(mon, "changed", G_CALLBACK(on_trash_changed), NULL);
+    else
+        g_timeout_add_seconds(2, poll_full, NULL);      /* no monitor: look every 2 s */
     GdkWindow *groot = gdk_get_default_root_window();
     gdk_window_set_events(groot, gdk_window_get_events(groot) | GDK_PROPERTY_CHANGE_MASK);
     gdk_window_add_filter(groot, root_filter, NULL);
