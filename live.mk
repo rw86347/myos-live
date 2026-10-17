@@ -450,13 +450,15 @@ WP_DIR   ?= ../wp51/wp51c
 WP_LT    := $(WP_DIR)/../languagetool-native
 WP_OUT   := $(BUILD)/live/wp
 WP_BIN   := $(LIVE_EXTRA)/usr/lib/writeperfect/wp
-WP_GCC   := $(firstword $(wildcard $(LIVE_SYSROOT)/usr/lib/gcc/$(ALPINE_TRIPLET)/*))
-WP_CXXV  := $(notdir $(firstword $(wildcard $(LIVE_SYSROOT)/usr/include/c++/*)))
+# Looked up when used ("=", not ":="): on a clean build the sysroot is
+# unpacked by this same make run, after the Makefile has been read.
+WP_GCC    = $(firstword $(wildcard $(LIVE_SYSROOT)/usr/lib/gcc/$(ALPINE_TRIPLET)/*))
+WP_CXXV   = $(notdir $(firstword $(wildcard $(LIVE_SYSROOT)/usr/include/c++/*)))
 LIVE_CLANG := clang --target=$(ALPINE_TRIPLET) $(LIVE_MARCH) --sysroot=$(abspath $(LIVE_SYSROOT)) -O2 -MMD -MP
 # agent.c calls select() without <sys/select.h>; glibc brings it in through
 # other headers, musl doesn't.
 WP_CFLAGS  := -std=c11 -D_DEFAULT_SOURCE -w -include sys/select.h -I$(WP_DIR)/src -I$(WP_LT)/engine/include $(GTK_CFLAGS)
-WP_CXXFLAGS := -std=c++17 -w -nostdinc++ -isystem $(LIVE_SYSROOT)/usr/include/c++/$(WP_CXXV) \
+WP_CXXFLAGS = -std=c++17 -w -nostdinc++ -isystem $(LIVE_SYSROOT)/usr/include/c++/$(WP_CXXV) \
                -isystem $(LIVE_SYSROOT)/usr/include/c++/$(WP_CXXV)/$(ALPINE_TRIPLET) \
                -isystem $(LIVE_SYSROOT)/usr/include/libxml2 -I$(WP_LT)/engine/include \
                -I$(WP_LT)/morfologik/include -DPCRE2_CODE_UNIT_WIDTH=8 \
