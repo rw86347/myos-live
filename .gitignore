@@ -1,0 +1,4 @@
+.DS_Store
+__pycache__/
+# This machine's own live-disk settings (the home Wi-Fi network): never committed.
+overlay.local/
