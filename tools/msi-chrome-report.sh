@@ -5,15 +5,15 @@
 # Chromium the ways that matter, and save what happened in
 # build/msi-chrome-report.txt (for reading back on the Mac).
 #
-#   tools/msi-chrome-report.sh                 the MSI at 192.168.1.69
-#   MYOS_HOST=192.168.1.50 tools/msi-chrome-report.sh
+#   live/tools/msi-chrome-report.sh                 the MSI at 192.168.1.69
+#   MYOS_HOST=192.168.1.50 live/tools/msi-chrome-report.sh
 #
 # Also the network (address, route, DNS) and sound (the kernel's findings).
 # It only looks and tries: nothing on the MSI changes except scratch files
 # in /tmp. Log in at the MSI's own screen first (the desktop must be up),
 # and leave Chromium closed there. It takes about three minutes.
 set -u
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 HOST=${MYOS_HOST:-192.168.1.69}
 KEY=${SSH_KEY:-$HOME/.ssh/id_ed25519_nopass}
 OUT=build/msi-chrome-report.txt

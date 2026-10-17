@@ -11,7 +11,7 @@
  * When the session ends this program exits, and runit starts it again —
  * which gives the next person a fresh X server, as xdm does.
  *
- * The look is the "Golden Hour" theme (assets/themes/golden-hour): a
+ * The look is the "Golden Hour" theme (live/assets/themes/golden-hour): a
  * blurred photograph with a dark band at the top and bottom, the MyOS logo
  * on the left, and the machine's users on the right. The drawing is built
  * from one background picture plus shapes and text at run time, so it is
@@ -889,7 +889,7 @@ int main(void)
     open_window();
     ms_x_up = ms_since_main();
 
-    /* The sizes the theme drew with (assets/themes/golden-hour). */
+    /* The sizes the theme drew with (live/assets/themes/golden-hour). */
     ui.f_logo = font("DejaVu Sans:bold:italic", 54);
     ui.f_welcome = font("DejaVu Sans:bold:italic", 22);
     ui.f_name = font("DejaVu Sans:bold", 22);

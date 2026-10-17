@@ -69,7 +69,7 @@ def main():
 /*
  * worldmap.h — the Earth's land, for the installer's time zone map.
  *
- * Made by tools/make-worldmap.py from Natural Earth's 1:110m land
+ * Made by live/tools/make-worldmap.py from Natural Earth's 1:110m land
  * (public domain, naturalearthdata.com); don't edit, run that again.
  * Antarctica is cut off at {-LAT_BOTTOM}°S, and points that move a coastline
  * by less than {TOLERANCE} degrees are dropped: {len(kept)} outlines, {npts} points.

@@ -3,27 +3,27 @@
 # Copyright (c) 2026 Rodger Wilson
 """fetch-live.py — gather the software for the MyOS live disk.
 
-    tools/fetch-live.py            build from live/packages.lock (exact files)
-    tools/fetch-live.py --update   re-resolve live/packages.txt against Alpine's
+    live/tools/fetch-live.py            build from live/packages.lock (exact files)
+    live/tools/fetch-live.py --update   re-resolve live/packages.txt against Alpine's
                                    index and write a new lock file
-    tools/fetch-live.py --add      the same, but every package already in the
+    live/tools/fetch-live.py --add      the same, but every package already in the
                                    lock keeps its pinned version (it may move
                                    to another group): only what was added to
                                    the list (and the libraries it brings) is
                                    resolved, downloaded, pinned
-    tools/fetch-live.py --sysroot  only unpack the packages' headers and
+    live/tools/fetch-live.py --sysroot  only unpack the packages' headers and
                                    libraries into build/live/sysroot, to
                                    cross-compile MyOS's own programs against
-    tools/fetch-live.py --login-root
+    live/tools/fetch-live.py --login-root
                                    a smaller archive (base+init+desktop+compositor)
                                    for the live UEFI RAM boot, when USB storage
                                    is not in the kernel yet
-    LIVE_STALE_LOCK=1 tools/fetch-live.py ...
+    LIVE_STALE_LOCK=1 live/tools/fetch-live.py ...
                                    build from the lock even though packages.txt
                                    changed since: packages added to the list
                                    are left out (listed as a warning). For a
                                    test image before an --update is possible.
-    tools/fetch-live.py --arch x86|x86_64
+    live/tools/fetch-live.py --arch x86|x86_64
                                    Alpine architecture. Default x86 (i386).
                                    x86_64 merges live/packages.x86_64.txt on
                                    top of packages.txt and uses
@@ -70,7 +70,8 @@ import tarfile
 import time
 import zlib
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# The MyOS checkout: this file is live/tools/fetch-live.py (myos-live sits at live/).
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WORLD = os.path.join(ROOT, "live", "packages.txt")
 LOCK = os.path.join(ROOT, "live", "packages.lock")
 OVERLAY = os.path.join(ROOT, "live", "overlay")
@@ -354,7 +355,7 @@ def world_hash():
 
 def write_lock(entries):
     with open(LOCK, "w") as f:
-        f.write("# packages.lock — written by tools/fetch-live.py --update; do not edit.\n")
+        f.write("# packages.lock — written by live/tools/fetch-live.py --update; do not edit.\n")
         f.write("# Every package on the live disk, in install order, with the SHA-256 of\n")
         f.write("# its .apk. The build refuses any download that doesn't match.\n")
         f.write(f"world {world_hash()}\n")
@@ -366,7 +367,7 @@ def write_lock(entries):
 def read_lock(stale_ok=False):
     if not os.path.exists(LOCK):
         die(f"no {os.path.relpath(LOCK, ROOT)} yet: "
-            "run tools/fetch-live.py --arch "
+            "run live/tools/fetch-live.py --arch "
             f"{'x86_64' if ARCH != 'x86' else 'x86'} --update")
     entries, world = [], None
     for line in open(LOCK):
@@ -380,7 +381,7 @@ def read_lock(stale_ok=False):
     if world != world_hash() and not stale_ok:
         if os.environ.get("LIVE_STALE_LOCK") != "1":
             die(f"{os.path.relpath(WORLD_FILES[0], ROOT)} changed since the lock "
-                "was written: run tools/fetch-live.py --update "
+                "was written: run live/tools/fetch-live.py --update "
                 "(or LIVE_STALE_LOCK=1 to build without the new packages)")
         print(f"fetch-live: WARNING: {os.path.relpath(WORLD_FILES[0], ROOT)} changed "
               "since the lock was written; building from the lock as it is")

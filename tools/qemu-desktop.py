@@ -4,7 +4,7 @@
 """qemu-desktop.py — drive a 64-bit MyOS desktop in QEMU like a person:
 keys, the mouse, screenshots, and the serial log to check afterwards.
 
-  tools/qemu-desktop.py IMG SCRIPT SERIAL_LOG SHOT_DIR OVMF_CODE OVMF_VARS
+  live/tools/qemu-desktop.py IMG SCRIPT SERIAL_LOG SHOT_DIR OVMF_CODE OVMF_VARS
 
 IMG is a UEFI image (make ARCH=x86_64 ... myos-uefi-login.img). SCRIPT has
 one command per line (# starts a comment):
@@ -69,7 +69,7 @@ import os, shlex, socket, subprocess, sys, time
 img, script, serial_log, shot_dir, ovmf_code, ovmf_vars = sys.argv[1:7]
 vars_copy = os.path.join(shot_dir, 'desktop-ovmf-vars.fd')
 subprocess.run(['cp', ovmf_vars, vars_copy], check=True)
-TOOLS = os.path.dirname(os.path.abspath(__file__))
+TOOLS = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'tools')  # the kernel repo's
 
 
 def free_port():

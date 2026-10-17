@@ -6,7 +6,7 @@
 Linux trees have names that differ only in case. The Mac cannot unpack them
 into a folder. The archive can still be rewritten file by file.
 
-    python3 tools/tar2cpio.py in.tar out.cpio [--add dest=hostfile]...
+    python3 live/tools/tar2cpio.py in.tar out.cpio [--add dest=hostfile]...
 """
 from __future__ import annotations
 

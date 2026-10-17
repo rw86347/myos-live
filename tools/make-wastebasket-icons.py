@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Rodger Wilson
 """make-wastebasket-icons.py — the Recycle Bin's two pictures, empty and
-full, from the photos in assets/themes/golden-hour/wastebasket-*-source.jpg
+full, from the photos in live/assets/themes/golden-hour/wastebasket-*-source.jpg
 (chosen by Rodger, 2026-10-08).
 
 The sources are JPEGs with a checkerboard painted in where transparency
@@ -14,7 +14,7 @@ pixel is from the checkerboard) and without a pale halo (the colour of a
 half-transparent pixel has the checkerboard taken back out of it). Then it
 crops to the basket and writes square PNGs.
 
-    tools/make-wastebasket-icons.py      writes live/overlay/usr/share/myos/icons/
+    live/tools/make-wastebasket-icons.py      writes live/overlay/usr/share/myos/icons/
                                          wastebasket-empty.png, wastebasket-full.png
 """
 import os
@@ -24,8 +24,8 @@ import numpy as np
 from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
-SRC = os.path.join(ROOT, "assets/themes/golden-hour")
+ROOT = os.path.dirname(os.path.dirname(HERE))        # the MyOS checkout (live/ is inside it)
+SRC = os.path.join(ROOT, "live/assets/themes/golden-hour")
 OUT = os.path.join(ROOT, "live/overlay/usr/share/myos/icons")
 SIZE = 256
 

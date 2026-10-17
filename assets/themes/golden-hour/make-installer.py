@@ -8,13 +8,13 @@ pieces (palette, window, buttons, text boxes, the login screen's backdrop),
 so the wizard looks like the rest of MyOS. SVGs land next to the other
 mockups here; the PNGs (1024x768) go to docs/installer/.
 
-  python3 assets/themes/golden-hour/make-installer.py
+  python3 live/assets/themes/golden-hour/make-installer.py
 """
 import importlib.util
 import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, "..", "..", "..", "docs", "installer")
+OUT = os.path.join(HERE, "..", "..", "..", "..", "docs", "installer")
 spec = importlib.util.spec_from_file_location("theme", os.path.join(HERE, "make-theme.py"))
 T = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(T)

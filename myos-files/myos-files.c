@@ -2,7 +2,7 @@
 /* Copyright (c) 2026 Rodger Wilson */
 /*
  * myos-files — My Files, the file explorer, exactly as the Golden Hour
- * mockup draws it (assets/themes/golden-hour/mockup.png): menu bar, a
+ * mockup draws it (live/assets/themes/golden-hour/mockup.png): menu bar, a
  * toolbar with round Back / Forward / Up buttons and the address box, the
  * sand-coloured task pane with its two cards, big icons on white, and the
  * status bar. IceWM draws the title bar, from the same theme.

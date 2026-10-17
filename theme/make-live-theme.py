@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Rodger Wilson
 """make-live-theme.py — the Golden Hour theme as files the live disk uses.
 
-assets/themes/golden-hour/make-theme.py is the design: one palette, and a
+live/assets/themes/golden-hour/make-theme.py is the design: one palette, and a
 table that says how every element looks in every state. It draws the
 pictures people look at (mockup.png, login.png, the icon sheet). This
 script takes the same palette and table and writes what the machine needs:
@@ -16,7 +16,7 @@ script takes the same palette and table and writes what the machine needs:
                                        and the taskbar tray, one folder per scale
   usr/share/myos/icons/                the icon set as SVG, for My Files
 
-into build/live/extra, which tools/fetch-live.py copies into the disk
+into build/live/extra, which live/tools/fetch-live.py copies into the disk
 image on top of the packages. So the look has one source: change a color
 in make-theme.py and both the mockup and the running desktop follow.
 
@@ -38,7 +38,7 @@ import subprocess
 import zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-THEME_DIR = os.path.join(ROOT, "assets", "themes", "golden-hour")
+THEME_DIR = os.path.join(ROOT, "live", "assets", "themes", "golden-hour")
 OUT = os.path.abspath(os.environ.get("LIVE_EXTRA", os.path.join(ROOT, "build", "live", "extra")))
 WORK = os.path.join(ROOT, "build", "live", "theme-svg")
 
@@ -189,8 +189,12 @@ ICEWM_ICONS = [("terminal", "terminal"), ("text-editor", "text-editor"),
 ICON_SIZES = (16, 18, 32, 48)       # menus, title bars and taskbar, Alt+Tab
 
 # Programs that bring their own icon rather than one from the set.
-OWN_ICONS = {"writeperfect": os.path.join(ROOT, "live", "writeperfect", "writeperfect.svg"),
+# WritePerfect's is in its own repo (WP_DIR, as the Makefile has it): a disk
+# built without WritePerfect has no WritePerfect icon either.
+WP_DIR = os.environ.get("WP_DIR", os.path.join(ROOT, "..", "wp51", "wp51c"))
+OWN_ICONS = {"writeperfect": os.path.join(ROOT, WP_DIR, "myos", "writeperfect.svg"),
              "preview": os.path.join(ROOT, "live", "myos-preview", "preview.svg")}
+OWN_ICONS = {k: v for k, v in OWN_ICONS.items() if os.path.exists(v)}
 
 
 def own_icons():
@@ -358,7 +362,7 @@ THEME_FILE = """\
 # default.theme — "Golden Hour", the MyOS desktop.
 #
 # Written by live/theme/make-live-theme.py from the palette in
-# assets/themes/golden-hour/make-theme.py; don't edit this file, edit the
+# live/assets/themes/golden-hour/make-theme.py; don't edit this file, edit the
 # palette. The pictures next to it (the taskbar's gradient, the Start
 # button, the round title buttons) come from the same place.
 ThemeDescription="Golden Hour — the MyOS desktop, at {pct}%"

@@ -1161,7 +1161,7 @@ def color_tables():
     return "\n".join(o)
 
 
-DOC = os.path.join(HERE, "..", "..", "..", "docs", "ui-theme.md")
+DOC = os.path.join(HERE, "..", "..", "..", "..", "docs", "ui-theme.md")
 BEGIN, END = "<!-- colors:begin -->", "<!-- colors:end -->"
 
 

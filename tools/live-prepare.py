@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Rodger Wilson
 """live-prepare — do the live disk's first boot on the build machine.
 
-    tools/live-prepare.py IMAGE --debugfs PATH --e2fsck PATH \\
+    live/tools/live-prepare.py IMAGE --debugfs PATH --e2fsck PATH \\
                           --ovmf-code PATH --ovmf-vars PATH [--timeout SECONDS]
 
 A fresh live disk's first boot runs Alpine's install scripts (font cache,

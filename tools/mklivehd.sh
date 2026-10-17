@@ -4,7 +4,7 @@
 # mklivehd.sh — the live disk: the boot area of myos.img plus an ext2
 # partition labelled myos-root holding the live userland (rootfs.tar).
 #
-#   tools/mklivehd.sh build/myos.img build/live/rootfs.tar out.img MiB
+#   live/tools/mklivehd.sh build/myos.img build/live/rootfs.tar out.img MiB
 #
 # mke2fs -d can read a tar itself, but only when built with libarchive, and
 # Homebrew's isn't. So the tar is unpacked first — into a case-sensitive
@@ -98,7 +98,7 @@ if grep -v '^debugfs ' "$work/debugfs.err" | grep -q .; then
     exit 1
 fi
 if [ "$img" != "-" ]; then
-    "$(dirname "$0")/mbr-partition.sh" "$out" "$S" "$START" $((mb * 2048))
+    "$(dirname "$0")/../../tools/mbr-partition.sh" "$out" "$S" "$START" $((mb * 2048))
     echo "Built $out (boot area + $mb MiB ext2 myos-root, live userland)"
 else
     echo "Built $out ($mb MiB ext2 myos-root, live userland)"

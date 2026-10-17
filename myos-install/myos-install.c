@@ -8,7 +8,7 @@
  * helper. Closing the window leaves the live system as it was.
  *
  * The look follows the Golden Hour mockups in
- * assets/themes/golden-hour/make-installer.py: sand sidebar, teal labels,
+ * live/assets/themes/golden-hour/make-installer.py: sand sidebar, teal labels,
  * the same step names, nothing written before the summary page.
  */
 #include <X11/Xatom.h>

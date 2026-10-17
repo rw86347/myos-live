@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Rodger Wilson
 # first-boot.sh — finish the install on MyOS's first boot (run by
-# /etc/runit/1), doing what tools/fetch-live.py could not do on the Mac:
+# /etc/runit/1), doing what live/tools/fetch-live.py could not do on the Mac:
 #
 # KERNEL GAP (x86_64): Alpine install scripts need copy_file_range (326) and
 # vfork (190); stage 1 mounts need fsopen/fsmount (430+). See

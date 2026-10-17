@@ -55,7 +55,7 @@ done
 
 [ -e /etc/myos/first-boot.done ] || /etc/myos/first-boot.sh
 
-# Building the image (tools/live-prepare.py boots it once, so that the first
+# Building the image (live/tools/live-prepare.py boots it once, so that the first
 # boot's 10-15 s of caches and databases happen on the build machine, not on
 # every stick): keep nothing that has to differ between machines, and shut
 # down. Exit code 100 makes runit skip stage 2 and run stage 3, which writes

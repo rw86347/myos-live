@@ -3,7 +3,7 @@
 /*
  * worldmap.h — the Earth's land, for the installer's time zone map.
  *
- * Made by tools/make-worldmap.py from Natural Earth's 1:110m land
+ * Made by live/tools/make-worldmap.py from Natural Earth's 1:110m land
  * (public domain, naturalearthdata.com); don't edit, run that again.
  * Antarctica is cut off at 84°S, and points that move a coastline
  * by less than 0.2 degrees are dropped: 125 outlines, 2956 points.

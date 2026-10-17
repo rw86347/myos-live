@@ -4,7 +4,7 @@
  * myos-trash — the Recycle Bin on the desktop: the first place in the
  * left column, a wire wastebasket (empty, or with paper in it while
  * ~/Trash holds something: wastebasket-{empty,full}.png, from Rodger's
- * pictures by tools/make-wastebasket-icons.py) and a white label.
+ * pictures by live/tools/make-wastebasket-icons.py) and a white label.
  *
  * It is a desktop-type window (IceWM keeps those under every other
  * window), so it sits on the wallpaper. Drops land here: any file URI
