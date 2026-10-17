@@ -57,6 +57,9 @@ int disks_has_esp(const struct disk_info *d)
 /* Why MyOS can't go into this disk's free space, or NULL if it can. */
 const char *disks_free_problem(const struct disk_info *d, unsigned long long need)
 {
+    if (!disks_firmware_uefi() && d->npart)
+        return "On a computer that starts with BIOS, MyOS needs a whole disk: it can't "
+               "start another system yet. Choose \u201cErase disk\u201d, or pick another one.";
     if (disks_has_esp(d))
         return "MyOS can't add itself to the EFI partition this disk already has "
                "(writing to FAT isn't finished yet). Choose \u201cErase disk\u201d to use "

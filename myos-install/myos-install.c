@@ -798,6 +798,10 @@ static void build_layout(const struct disk_info *d)
         unsigned long long esp = (unsigned long long)ESP_MIB << 20;
         lay_add(after_lay, &nafter, DISK_PARTS + 6, K_ESP, "EFI System", "FAT32", esp, "/boot/efi", "new");
         room = room > esp ? room - esp : 0;
+    } else if (!uefi) {                 /* BIOS: MyOS's start code and kernel, raw */
+        unsigned long long boot = (unsigned long long)BOOT_AREA_MIB << 20;
+        lay_add(after_lay, &nafter, DISK_PARTS + 6, K_ESP, "MyOS boot area", "", boot, "\u2014", "new");
+        room = room > boot ? room - boot : 0;
     }
     root_room = room;
     unsigned long long root = (unsigned long long)ui.plan.root_gb * gb;

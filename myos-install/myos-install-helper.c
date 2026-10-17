@@ -21,7 +21,7 @@
  *   myos-install-helper --dry-run PLAN      what --apply would do
  *   myos-install-helper --apply PLAN
  *
- * What --apply does (a UEFI computer; installing for BIOS isn't written):
+ * What --apply does on a UEFI computer:
  *   partition    sfdisk. Erase: a new GPT with "EFI System", myos-root and
  *                myos-data. Free space: the same three added after what is
  *                there (--append), only on a disk with no EFI partition yet.
@@ -31,6 +31,12 @@
  *   boot         myos-mkesp: FAT32 on the new EFI partition, holding a copy
  *                of the stick's own (EFI/BOOT/BOOTX64.EFI finds the kernel,
  *                the firmware finds BOOTX64.EFI).
+ * On a BIOS computer (the old PCs) the disk gets what `make hd` and the
+ * 32-bit live stick have (bios_partition, bios_boot): an MBR whose boot
+ * code loads stage 2 from sector 1, partition 1 the boot area (stage 2,
+ * the kernel, its initramfs: the stick's, copied sector for sector), then
+ * myos-root, myos-config and myos-data. The whole disk only: MyOS can't
+ * start another system yet, so it can't share a BIOS disk.
  *   copy         myos-root at /mnt/myos-root (and myos-data at its /data),
  *                then rsync of the running system.
  *   configure    the account, computer name, language, keyboard, clock; the
@@ -90,6 +96,12 @@ static struct layout {
     unsigned long long before[DISK_PARTS];  /* start sectors that were already there */
     int nbefore;
     char esp[64], root[64], datadev[64], config[64];   /* found after sfdisk, by GPT name */
+    /* BIOS: the disk's size, and the stick's boot code and boot area. */
+    int bios;
+    unsigned long long sectors;
+    char livedisk[64];
+    unsigned char bootcode[446];
+    unsigned long long boot_sectors;    /* the stick's: its MBR and boot area */
 } L;
 
 static void logline(const char *fmt, ...)
@@ -342,6 +354,54 @@ static int may_install(uid_t caller)
     return 0;
 }
 
+/* ---- BIOS computers (the old PCs): an MBR disk ----
+
+   The BIOS runs the code in the disk's first sector (the MBR), which loads
+   stage 2 from the sectors right after it; stage 2 loads the kernel and its
+   small initramfs from the sectors after those. That boot area is MBR
+   partition 1 (type 0x7F, active) from sector 1 on, as tools/mbr-partition.sh
+   writes it for `make hd` and the 32-bit live stick, so the stick's own is
+   copied sector for sector. MBR partitions have no names: the kernel finds
+   myos-root and myos-data by their ext2 labels, myos-config by its type,
+   0xDA (docs/KERNEL-CONFIG.md §8). */
+#define BOOT_SECTORS ((unsigned long long)BOOT_AREA_MIB * 2048)
+
+static unsigned long long le32(const unsigned char *b)
+{
+    return b[0] | (unsigned)b[1] << 8 | (unsigned)b[2] << 16 | (unsigned long long)b[3] << 24;
+}
+
+/* The stick MyOS started from: its MBR boot code and how long its boot
+   area is. */
+static int live_boot_area(void)
+{
+    struct disk_info disks[DISKS_MAX];
+    int nd = disks_scan(disks, DISKS_MAX);
+    unsigned char mbr[512];
+
+    for (int i = 0; i < nd && !L.livedisk[0]; i++)
+        if (disks[i].running)
+            snprintf(L.livedisk, sizeof L.livedisk, "%s", disks[i].path);
+    if (!L.livedisk[0])
+        return fail("Can't find the disk MyOS started from.");
+    int fd = open(L.livedisk, O_RDONLY | O_CLOEXEC);
+    int got = fd >= 0 && pread(fd, mbr, sizeof mbr, 0) == (ssize_t)sizeof mbr;
+    if (fd >= 0)
+        close(fd);
+    if (!got || mbr[510] != 0x55 || mbr[511] != 0xAA)
+        return fail("Can't read the first sector of %s.", L.livedisk);
+    for (int k = 0; k < 4; k++) {
+        const unsigned char *e = mbr + 446 + 16 * k;
+        if (e[4] == 0x7F && le32(e + 8) == 1 && le32(e + 12)) {
+            memcpy(L.bootcode, mbr, sizeof L.bootcode);
+            L.boot_sectors = 1 + le32(e + 12);
+            return 0;
+        }
+    }
+    return fail("%s has no MyOS boot area (an MBR partition of type 7f at sector 1): "
+                "start the computer from a MyOS stick made for BIOS.", L.livedisk);
+}
+
 /* Decide the layout from the disk as it is now, before anything is
    written; refuse what can't work, with a sentence saying why. */
 static int check_layout(const struct install_plan *p)
@@ -351,8 +411,6 @@ static int check_layout(const struct install_plan *p)
     const struct disk_info *d = disks_find(disks, n, p->disk);
     unsigned long long esp = (unsigned long long)ESP_MIB * MIB, pool, root, min;
 
-    if (p->firmware != FW_UEFI)
-        return fail("Installing on a computer that starts with BIOS isn't finished yet. Nothing was written.");
     if (!d || !is_block(p->disk))
         return fail("The disk %s isn't there (any more). Nothing was written.", p->disk);
     if (d->in_use)
@@ -361,6 +419,21 @@ static int check_layout(const struct install_plan *p)
                                        "computer, then install again. Nothing was written.");
     memset(&L, 0, sizeof L);
     L.erase = p->mode == MODE_ERASE;
+    L.bios = p->firmware == FW_BIOS;
+    L.sectors = d->bytes / 512;
+    if (L.bios) {
+        if (!L.erase && d->npart)
+            return fail("On a computer that starts with BIOS, MyOS needs a whole disk: it can't "
+                        "start another system yet. Choose Erase, or another disk. Nothing was written.");
+        L.erase = 1;                    /* (an empty disk: nothing to keep) */
+        if (L.sectors > 0xFFFFFFFFULL)
+            return fail("The disk is bigger than 2 TB, more than an MBR can hold. Nothing was written.");
+        if (live_boot_area())
+            return -1;
+        if (L.boot_sectors > BOOT_SECTORS)
+            return fail("The stick's boot area (%llu sectors) is bigger than the %d MiB kept for it.",
+                        L.boot_sectors, BOOT_AREA_MIB);
+    }
     if (!L.erase) {
         const char *why = disks_free_problem(d, (unsigned long long)MIN_INSTALL_GB * GB);
         if (why)
@@ -372,6 +445,8 @@ static int check_layout(const struct install_plan *p)
        alignment in front. Free space: what is left, all of it usable only
        if it is in one piece (sfdisk says so if it isn't). */
     pool = L.erase ? d->bytes - 2 * MIB : d->free_bytes;
+    if (L.bios)
+        esp = (unsigned long long)BOOT_AREA_MIB * MIB;  /* the boot area, where UEFI has its ESP */
     min = esp + (unsigned long long)MIN_INSTALL_GB * GB;
     if (pool < min)
         return fail("The disk is too small: MyOS needs %d GB. Nothing was written.",
@@ -384,9 +459,10 @@ static int check_layout(const struct install_plan *p)
     L.data = p->separate_home && pool - esp - (L.root_mib + CONFIG_MIB) * MIB >= GB;
     if (p->separate_home && !L.data)
         logline("no room for myos-data: /home stays on myos-root");
-    logline("layout on %s (%s): %s; EFI %d MiB, myos-root %llu MiB, myos-config %d MiB%s",
-            p->disk, d->name, L.erase ? "new partition table" : "added in the free space",
-            ESP_MIB, L.root_mib, CONFIG_MIB, L.data ? ", myos-data the rest" : "");
+    logline("layout on %s (%s): %s; %s %d MiB, myos-root %llu MiB, myos-config %d MiB%s",
+            p->disk, d->name, L.bios ? "a new MBR" : L.erase ? "new partition table" : "added in the free space",
+            L.bios ? "boot area" : "EFI", L.bios ? BOOT_AREA_MIB : ESP_MIB, L.root_mib, CONFIG_MIB,
+            L.data ? ", myos-data the rest" : "");
     return 0;
 }
 
@@ -439,6 +515,125 @@ static int clear_config(void)
                          strerror(errno));
 }
 
+static void mbr_entry(unsigned char *mbr, int k, int active, int type,
+                      unsigned long long start, unsigned long long count)
+{
+    unsigned char *e = mbr + 446 + 16 * k;
+    e[0] = active ? 0x80 : 0;
+    /* CHS: "use the LBA fields" (0xFE 0xFF 0xFF), but the boot area's
+       start, sector 1, which old BIOSes may read as cylinder 0, head 0,
+       sector 2 (as tools/mbr-partition.sh writes it). */
+    e[1] = start == 1 ? 0 : 0xFE, e[2] = start == 1 ? 2 : 0xFF, e[3] = start == 1 ? 0 : 0xFF;
+    e[4] = (unsigned char)type;
+    e[5] = 0xFE, e[6] = 0xFF, e[7] = 0xFF;
+    for (int i = 0; i < 4; i++) {
+        e[8 + i] = (unsigned char)(start >> (8 * i));
+        e[12 + i] = (unsigned char)(count >> (8 * i));
+    }
+}
+
+/* After the MBR is written: its partitions, by where they start. */
+static int bios_find_parts(const struct install_plan *p, unsigned long long root,
+                           unsigned long long config, unsigned long long data)
+{
+    struct disk_info disks[DISKS_MAX];
+    int n = disks_scan(disks, DISKS_MAX);
+    const struct disk_info *d = disks_find(disks, n, p->disk);
+
+    for (int i = 0; d && i < d->npart; i++) {
+        const struct disk_part *q = &d->parts[i];
+        char *slot = q->start == root ? L.root : q->start == config ? L.config
+                   : L.data && q->start == data ? L.datadev : NULL;
+        if (slot)
+            snprintf(slot, sizeof L.root, "/dev/%s", q->name);
+    }
+    if (!L.root[0] || !L.config[0] || (L.data && !L.datadev[0]))
+        return fail("The new partitions didn't appear on %s (the kernel didn't read the new table).",
+                    p->disk);
+    if (!is_block(L.root) || !is_block(L.config) || (L.data && !is_block(L.datadev)))
+        return fail("The new partitions have no /dev files.");
+    logline("new: myos-root %s, myos-config %s%s%s", L.root, L.config,
+            L.data ? ", myos-data " : "", L.data ? L.datadev : "");
+    return 0;
+}
+
+/* A new MBR: the boot area, myos-root, myos-config, myos-data. No boot
+   code yet (bios_boot): until the copy is done the disk doesn't start. */
+static int bios_partition(const struct install_plan *p)
+{
+    static const unsigned char zero[33 * 512];
+    unsigned char mbr[512];
+    unsigned long long root = BOOT_SECTORS, config = root + L.root_mib * 2048,
+                       data = config + CONFIG_MIB * 2048;
+    int fd, ok, rc;
+
+    memset(mbr, 0, sizeof mbr);
+    mbr_entry(mbr, 0, 1, 0x7F, 1, BOOT_SECTORS - 1);
+    mbr_entry(mbr, 1, 0, 0x83, root, L.root_mib * 2048);
+    mbr_entry(mbr, 2, 0, 0xDA, config, CONFIG_MIB * 2048);
+    if (L.data)
+        mbr_entry(mbr, 3, 0, 0x83, data, L.sectors - data);
+    mbr[510] = 0x55, mbr[511] = 0xAA;
+    logline("MBR for %s: boot area sectors 1-%llu (type 7f, active), myos-root at %llu, "
+            "myos-config at %llu (type da)%s", p->disk, BOOT_SECTORS - 1, root, config,
+            L.data ? ", myos-data after it" : "");
+    if (!apply)
+        return 0;
+    /* A GPT the disk had keeps a second copy in its last 33 sectors, and
+       other systems would still believe it: cleared. (Its first copy, from
+       sector 1, is under the boot area, written over in bios_boot.) */
+    fd = open(p->disk, O_RDWR | O_CLOEXEC);
+    ok = fd >= 0 && pwrite(fd, zero, sizeof zero, 512) == (ssize_t)sizeof zero &&
+         pwrite(fd, zero, sizeof zero, (L.sectors - 33) * 512) == (ssize_t)sizeof zero &&
+         pwrite(fd, mbr, sizeof mbr, 0) == (ssize_t)sizeof mbr && fsync(fd) == 0;
+    rc = ok ? ioctl(fd, BLKRRPART) : -1;
+    if (fd >= 0)
+        close(fd);
+    if (!ok)
+        return fail("Can't write the partition table on %s (%s).", p->disk, strerror(errno));
+    if (rc)
+        return fail("The kernel couldn't read the new partition table (%s). Restart the computer "
+                    "and install again.", strerror(errno));
+    return bios_find_parts(p, root, config, data) || clear_config();
+}
+
+/* The stick's boot code into the new MBR (its partition table stays), and
+   the stick's boot area, sector for sector, from sector 1. */
+static int bios_boot(const struct install_plan *p)
+{
+    unsigned char mbr[512], buf[65536];
+    unsigned long long at = 512, end = L.boot_sectors * 512;
+    int in, out, ok;
+
+    step("boot");
+    say("progress 14");
+    say("file writing MyOS's start code and boot area");
+    logline("boot: %s's MBR code and its boot area (%llu sectors) onto %s", L.livedisk,
+            L.boot_sectors - 1, p->disk);
+    if (!apply)
+        return 0;
+    in = open(L.livedisk, O_RDONLY | O_CLOEXEC);
+    out = open(p->disk, O_RDWR | O_CLOEXEC);
+    ok = in >= 0 && out >= 0 && pread(out, mbr, sizeof mbr, 0) == (ssize_t)sizeof mbr;
+    while (ok && at < end) {
+        size_t n = end - at < sizeof buf ? (size_t)(end - at) : sizeof buf;
+        ok = pread(in, buf, n, (off_t)at) == (ssize_t)n && pwrite(out, buf, n, (off_t)at) == (ssize_t)n;
+        at += n;
+    }
+    if (ok) {
+        memcpy(mbr, L.bootcode, sizeof L.bootcode);
+        ok = pwrite(out, mbr, sizeof mbr, 0) == (ssize_t)sizeof mbr && fsync(out) == 0;
+    }
+    if (in >= 0)
+        close(in);
+    if (out >= 0)
+        close(out);
+    if (!ok)
+        return fail("Writing the boot area to %s failed (%s).", p->disk, strerror(errno));
+    say("progress 20");
+    return 0;
+}
+
 static int step_partition(const struct install_plan *p)
 {
     char script[768];
@@ -447,6 +642,8 @@ static int step_partition(const struct install_plan *p)
     step("partition");
     say("progress 3");
     say("file writing the partition table");
+    if (L.bios)
+        return bios_partition(p);
     snprintf(script, sizeof script,
              "%s"
              "size=%dMiB, type=" GPT_ESP ", name=\"" ESP_NAME "\"\n"
@@ -538,14 +735,18 @@ static int step_boot(const struct install_plan *p)
     char src[256], probe[300];
     struct stat st;
 
-    (void)p;
+    if (L.bios)
+        return bios_boot(p);
     step("boot");
     say("progress 14");
     say("file copying MyOS's start files to the EFI partition");
     logline("FAT32 on the new EFI partition, with the stick's EFI/BOOT and EFI/MYOS "
-            "(the firmware starts EFI/BOOT/BOOTX64.EFI by itself; no boot entry is written)");
+            "(the firmware starts EFI/BOOT/BOOTX64.EFI by itself; no boot entry is written), "
+            "but not INITRD.CPIO: the stick's fallback for disks MyOS can't drive, which "
+            "the loader would read at every start, and this disk is one MyOS drives");
     if (!apply) {
-        char *a[] = { "python3", "-I", MKESP, "<EFI partition>", "<the stick's>", NULL };
+        char *a[] = { "python3", "-I", MKESP, "<EFI partition>", "<the stick's>",
+                      "--without", "EFI/MYOS/INITRD.CPIO", NULL };
         return run(a);
     }
     if (live_esp(src, sizeof src))
@@ -554,7 +755,8 @@ static int step_boot(const struct install_plan *p)
     if (stat(probe, &st))
         return fail("The stick's EFI partition has no EFI/BOOT/BOOTX64.EFI.");
     {
-        char *a[] = { "python3", "-I", MKESP, L.esp, src, NULL };
+        char *a[] = { "python3", "-I", MKESP, L.esp, src, "--without", "EFI/MYOS/INITRD.CPIO",
+                      NULL };
         if (run(a))
             return fail("Making the EFI partition failed (see %s).", PLAN_LOG_DEFAULT);
     }

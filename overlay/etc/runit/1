@@ -24,6 +24,12 @@ mkdir -p /dev/shm
 mountpoint -q /dev/shm || mount -t tmpfs -o mode=1777,nosuid,nodev,noexec shm /dev/shm 2>/dev/null
 mkdir -p /run/runit /tmp /var/log
 chmod 1777 /tmp
+# The kernel's messages from this start, kept on disk: the kernel's own copy
+# is gone at the next start, and a machine with no serial port or network
+# (a new laptop, a VM) has no other way to show what the kernel found. The
+# start before is kept as boot.log.old. Root only: they hold kernel addresses.
+[ -f /var/log/boot.log ] && mv -f /var/log/boot.log /var/log/boot.log.old
+(umask 077; dmesg > /var/log/boot.log 2>/dev/null)
 # The mount table, as on any Linux: mount, df and GLib read /etc/mtab.
 [ -L /etc/mtab ] || ln -sf /proc/self/mounts /etc/mtab
 
@@ -48,6 +54,21 @@ for l in /etc/sv/*/supervise; do
 done
 
 [ -e /etc/myos/first-boot.done ] || /etc/myos/first-boot.sh
+
+# Building the image (tools/live-prepare.py boots it once, so that the first
+# boot's 10-15 s of caches and databases happen on the build machine, not on
+# every stick): keep nothing that has to differ between machines, and shut
+# down. Exit code 100 makes runit skip stage 2 and run stage 3, which writes
+# everything out and powers off.
+if [ -e /etc/myos/first-boot.build ]; then
+    rm -f /etc/machine-id /etc/ssh/ssh_host_* /var/log/boot.log /var/log/boot.log.old
+    rm -f /etc/myos/first-boot.build
+    echo "MyOS: the first boot's work is done; this image is ready to ship."
+    exit 100
+fi
+# This machine's own D-Bus id (/etc/machine-id), once: every image ships
+# without one, so no two machines share it.
+[ -s /etc/machine-id ] || dbus-uuidgen --ensure=/etc/machine-id 2>/dev/null
 
 hostname -F /etc/hostname 2>/dev/null
 echo "MyOS is up."

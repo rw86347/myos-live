@@ -30,7 +30,7 @@
 #define MIN_INSTALL_GB 8
 #define DEFAULT_ROOT_GB 32
 #define ESP_MIB 512                 /* the stick's start files (INITRD.CPIO ~240 MB) and room */
-#define BOOT_AREA_MIB 1
+#define BOOT_AREA_MIB 64             /* BIOS: stage 2, the kernel, its initramfs (~4 MB) and room */
 
 enum install_mode {
     MODE_FREE = 0,              /* only unpartitioned space; keep what exists */
