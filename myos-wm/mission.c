@@ -616,11 +616,18 @@ static void open_mc(bool expose)
     m->open = true;
     m->p_dir = 1;
     p_last_dir = 1;
+    /* Every desktop's miniature is up the whole time Mission Control is:
+       the bar grows with the zoom (not with App Expose, which has no bar). */
+    m->bar_dir = expose ? (m->bar > 0 ? -1 : 0) : 1;
+    if (m->bar_dir)
+        bar_last_dir = m->bar_dir;
     m->last_ms = now_ms();
     m->frames_over = 0;
     if (srv.reduce_motion) {
         m->p = 1;
         m->p_dir = 0;
+        m->bar = expose ? 0 : 1;
+        m->bar_dir = 0;
     }
     wlr_scene_node_set_enabled(&m->tree->node, true);
     wlr_scene_node_set_enabled(&srv.spaces_root->node, false);
@@ -887,19 +894,6 @@ bool mc_motion(double x, double y)
         return true;
     }
 
-    /* The bar grows into miniatures while the pointer is up there (or a
-       window is being dragged toward it). */
-    int bar_h = m->bar > 0 ? bar_big_h : BAR_SMALL + 8;
-    struct output *o = primary_output();
-    bool near_top = o && y < o->full.y + bar_h && !m->expose;
-    int want = near_top ? 1 : -1;
-    if ((want > 0 && m->bar < 1) || (want < 0 && m->bar > 0)) {
-        if (m->bar_dir != want) {
-            m->bar_dir = want;
-            bar_last_dir = want;
-            m->last_ms = now_ms();
-        }
-    }
     hover_slot = slot_at(x, y);
     m->hover = m->drag ? NULL : thumb_at(x, y);
     mc_apply();

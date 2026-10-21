@@ -32,10 +32,12 @@
 #include <wlr/types/wlr_primary_selection.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_seat.h>
+#include <wlr/types/wlr_touch.h>
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/edges.h>
 #include <wlr/xcursor.h>
+#include <wlr/util/log.h>
 #include <wlr/xwayland.h>
 #include <xkbcommon/xkbcommon.h>
 #include "wm.h"
@@ -508,15 +510,65 @@ static void swipe_end(struct wl_listener *l, void *data)
     srv.swipe_fingers = 0;
 }
 
+/* --- a touch screen: one finger is the pointer ---------------------------------------
+   It moves the pointer there and holds the left button down until it lifts,
+   so the curl, title bars and Mission Control all work by touch (the GPD
+   Pocket's screen, and QEMU's usb-tablet, which the kernel reports as one). */
+
+static int32_t touch_id = -1;
+
+static void press(uint32_t time, bool down)
+{
+    struct wlr_pointer_button_event b = {
+        .time_msec = time, .button = BTN_LEFT,
+        .state = down ? WLR_BUTTON_PRESSED : WLR_BUTTON_RELEASED,
+    };
+    cursor_button(NULL, &b);
+    wlr_seat_pointer_notify_frame(srv.seat);
+}
+
+static void touch_down(struct wl_listener *l, void *data)
+{
+    (void)l;
+    struct wlr_touch_down_event *ev = data;
+    if (touch_id >= 0)
+        return;
+    touch_id = ev->touch_id;
+    wlr_cursor_warp_absolute(srv.cursor, &ev->touch->base, ev->x, ev->y);
+    motion(ev->time_msec);
+    press(ev->time_msec, true);
+}
+
+static void touch_motion(struct wl_listener *l, void *data)
+{
+    (void)l;
+    struct wlr_touch_motion_event *ev = data;
+    if (ev->touch_id != touch_id)
+        return;
+    wlr_cursor_warp_absolute(srv.cursor, &ev->touch->base, ev->x, ev->y);
+    motion(ev->time_msec);
+}
+
+static void touch_up(struct wl_listener *l, void *data)
+{
+    (void)l;
+    struct wlr_touch_up_event *ev = data;
+    if (ev->touch_id != touch_id)
+        return;
+    touch_id = -1;
+    press(ev->time_msec, false);
+}
+
 /* --- devices and the seat --------------------------------------------------------- */
 
 static void new_input(struct wl_listener *l, void *data)
 {
     (void)l;
     struct wlr_input_device *dev = data;
+    wlr_log(WLR_INFO, "input: %s (type %d)", dev->name, dev->type);
     if (dev->type == WLR_INPUT_DEVICE_KEYBOARD)
         new_keyboard(dev);
-    else if (dev->type == WLR_INPUT_DEVICE_POINTER)
+    else if (dev->type == WLR_INPUT_DEVICE_POINTER || dev->type == WLR_INPUT_DEVICE_TOUCH)
         wlr_cursor_attach_input_device(srv.cursor, dev);
     uint32_t caps = WL_SEAT_CAPABILITY_POINTER;
     if (!wl_list_empty(&srv.keyboards))
@@ -576,7 +628,10 @@ void input_init(void)
                               l_frame = {.notify = cursor_frame},
                               l_sw_begin = {.notify = swipe_begin},
                               l_sw_update = {.notify = swipe_update},
-                              l_sw_end = {.notify = swipe_end};
+                              l_sw_end = {.notify = swipe_end},
+                              l_t_down = {.notify = touch_down},
+                              l_t_motion = {.notify = touch_motion},
+                              l_t_up = {.notify = touch_up};
     wl_signal_add(&srv.cursor->events.motion, &l_motion);
     wl_signal_add(&srv.cursor->events.motion_absolute, &l_abs);
     wl_signal_add(&srv.cursor->events.button, &l_button);
@@ -585,6 +640,9 @@ void input_init(void)
     wl_signal_add(&srv.cursor->events.swipe_begin, &l_sw_begin);
     wl_signal_add(&srv.cursor->events.swipe_update, &l_sw_update);
     wl_signal_add(&srv.cursor->events.swipe_end, &l_sw_end);
+    wl_signal_add(&srv.cursor->events.touch_down, &l_t_down);
+    wl_signal_add(&srv.cursor->events.touch_motion, &l_t_motion);
+    wl_signal_add(&srv.cursor->events.touch_up, &l_t_up);
 
     wl_list_init(&srv.keyboards);
     static struct wl_listener l_input = {.notify = new_input};

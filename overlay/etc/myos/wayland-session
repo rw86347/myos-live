@@ -14,6 +14,8 @@ fi
 
 # wlroots: draw with the CPU (there is no GPU driver, only dumb buffers on
 # /dev/dri/card0), and get the screen and input through seatd.
+unset DISPLAY WAYLAND_DISPLAY       # the login screen's X server is gone
+export WLR_BACKENDS=drm,libinput
 export WLR_RENDERER=pixman
 export WLR_DRM_DEVICES=/dev/dri/card0
 export WLR_NO_HARDWARE_CURSORS=1
