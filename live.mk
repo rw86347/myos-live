@@ -288,6 +288,29 @@ $(DESKTOP_BIN): live/myos-desktop/myos-desktop.c live/myos-settings/scale.h \
 	  -c live/myos-desktop/myos-desktop.c -o $(BUILD)/live/myos-desktop.o
 	$(call LIVE_LINK,$(BUILD)/live/myos-desktop.o,-lgtk-3 -lgdk-3 -lgdk_pixbuf-2.0 -lgio-2.0 \
 	  -lgobject-2.0 -lglib-2.0 -lpango-1.0 -lpangocairo-1.0 -lcairo -lrsvg-2 -lpoppler-glib -lX11 -lm)
+# The Wayland window server (live/myos-wm): wlroots, cairo and pango for
+# the title bars and Mission Control, gdk-pixbuf for icons and the
+# wallpaper. Its xdg-shell and layer-shell headers are generated once
+# (wayland-scanner) and kept in live/myos-wm. Mission Control's layout is
+# checked on the host: `make wm-layout-test`.
+WM_BIN  := $(LIVE_EXTRA)/usr/bin/myos-wm
+WM_SRCS := main view input draw mission layout
+WM_OBJS := $(WM_SRCS:%=$(BUILD)/live/myos-wm/%.o)
+WM_CFLAGS := $(LOGIN_CFLAGS) -DWLR_USE_UNSTABLE -Ilive/myos-wm \
+             $(addprefix -isystem $(LIVE_SYSROOT)/usr/include/,pixman-1 libdrm cairo pango-1.0 \
+                harfbuzz glib-2.0 gdk-pixbuf-2.0) -isystem $(LIVE_SYSROOT)/usr/lib/glib-2.0/include
+$(WM_OBJS): $(BUILD)/live/myos-wm/%.o: live/myos-wm/%.c live/myos-wm/wm.h live/myos-wm/layout.h | $(LIVE_SYSROOT)/.done
+	@mkdir -p $(dir $@)
+	$(CC) $(WM_CFLAGS) -c $< -o $@
+$(WM_BIN): $(WM_OBJS)
+	@mkdir -p $(dir $@)
+	$(call LIVE_LINK,$(WM_OBJS),-lwlroots -lwayland-server -lxkbcommon -lpixman-1 -lcairo \
+	  -lpango-1.0 -lpangocairo-1.0 -lgdk_pixbuf-2.0 -lgobject-2.0 -lglib-2.0 -lm)
+wm-layout-test: live/myos-wm/layout.c live/myos-wm/layout_test.c live/myos-wm/layout.h
+	@mkdir -p $(BUILD)/live
+	cc -std=c11 -O2 -Wall -Wextra live/myos-wm/layout.c live/myos-wm/layout_test.c -o $(BUILD)/live/layout_test
+	$(BUILD)/live/layout_test
+.PHONY: wm-layout-test
 # My Files (live/myos-files): GTK3 for the window, cairo and pango for
 # the drawing, librsvg for the theme's SVG icons.
 FILES_BIN := $(LIVE_EXTRA)/usr/bin/myos-files
@@ -531,14 +554,14 @@ $(LIVE_THEME): live/theme/make-live-theme.py live/assets/themes/golden-hour/make
 	@touch $@
 
 live-theme: $(LIVE_THEME)
-live-extra: $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(MENU_BIN) $(SETTINGS_BIN) $(XSETTINGS_BIN) $(ADDUSER_BIN) $(KCONFIG_BIN) $(INSTALL_BIN) $(HELPER_BIN) $(MKESP_BIN) $(FILES_BIN) $(PREVIEW_BIN) $(WIFI_BIN) $(DESKTOP_BIN) $(WP_BIN) $(RM_BIN) $(TRASH_BIN) $(VOLUME_BIN) $(FORCEQUIT_BIN) $(CHOOSE_BIN) $(PLAYER_BIN)
+live-extra: $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(MENU_BIN) $(SETTINGS_BIN) $(XSETTINGS_BIN) $(ADDUSER_BIN) $(KCONFIG_BIN) $(INSTALL_BIN) $(HELPER_BIN) $(MKESP_BIN) $(FILES_BIN) $(PREVIEW_BIN) $(WIFI_BIN) $(DESKTOP_BIN) $(WP_BIN) $(RM_BIN) $(TRASH_BIN) $(VOLUME_BIN) $(FORCEQUIT_BIN) $(CHOOSE_BIN) $(PLAYER_BIN) $(WM_BIN)
 
 # The live disk: like `make hd`, but myos-root holds the live userland
 # (live/tools/mklivehd.sh: owners, setuid bits and case-only names kept).
 # Every overlay file is a prerequisite. Names may have spaces ("My Files.desktop"
 # in the Programs menu): find's output is escaped so make keeps each one whole.
 OVERLAY_DEPS := $(shell find live/overlay live/overlay.local -type f 2>/dev/null | sed 's/ /\\ /g')
-$(LIVE_TAR): $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(MENU_BIN) $(SETTINGS_BIN) $(XSETTINGS_BIN) $(ADDUSER_BIN) $(KCONFIG_BIN) $(INSTALL_BIN) $(HELPER_BIN) $(MKESP_BIN) $(FILES_BIN) $(PREVIEW_BIN) $(WIFI_BIN) $(DESKTOP_BIN) $(WP_BIN) $(RM_BIN) $(TRASH_BIN) $(VOLUME_BIN) $(FORCEQUIT_BIN) $(CHOOSE_BIN) $(PLAYER_BIN) $(LIVE_LOCK) $(OVERLAY_DEPS)
+$(LIVE_TAR): $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(MENU_BIN) $(SETTINGS_BIN) $(XSETTINGS_BIN) $(ADDUSER_BIN) $(KCONFIG_BIN) $(INSTALL_BIN) $(HELPER_BIN) $(MKESP_BIN) $(FILES_BIN) $(PREVIEW_BIN) $(WIFI_BIN) $(DESKTOP_BIN) $(WP_BIN) $(RM_BIN) $(TRASH_BIN) $(VOLUME_BIN) $(FORCEQUIT_BIN) $(CHOOSE_BIN) $(PLAYER_BIN) $(WM_BIN) $(LIVE_LOCK) $(OVERLAY_DEPS)
 	python3 live/tools/fetch-live.py --arch $(ALPINE_ARCH)
 ifeq ($(ARCH),x86_64)
 $(LIVE_HD): $(LIVE_TAR) live/tools/mklivehd.sh
