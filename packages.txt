@@ -118,6 +118,22 @@ xdotool
 # and the check: docs/DESIGN.md, "the compositor is optional".
 picom
 
+[wayland]
+# The Wayland session (a preview, chosen on the login screen): MyOS's own
+# window server, myos-wm (live/myos-wm), with Mission Control built in. It
+# is a wlroots compositor: wlroots draws through the kernel's DRM interface
+# (/dev/dri/card0), reads the keyboard and mouse through libinput, and gets
+# both from seatd, which opens them for the logged-in user and hands them
+# back when the terminal is switched. X programs (IceWM's, GTK's with
+# GDK_BACKEND=x11) still run, inside it, through Xwayland. foot is the
+# terminal (xterm's Wayland twin, 0.5 MB). gtk-layer-shell lets a GTK
+# program be a panel or a wallpaper (myos-panel).
+wlroots
+seatd
+xwayland
+foot
+gtk-layer-shell
+
 [fonts]
 # Chinese, Japanese and Korean text: Noto Sans CJK and Noto Serif CJK
 # (Google and Adobe's Source Han), regular and bold. DejaVu has no CJK
@@ -291,3 +307,15 @@ webkit2gtk-4.1-dev
 libsoup3-dev
 # My Files (live/myos-files) draws the theme's own SVG icons with librsvg.
 librsvg-dev
+# myos-wm (live/myos-wm): wlroots and what its headers include (Wayland,
+# pixman, xkbcommon, XCB for Xwayland). The protocol headers made from
+# wayland-protocols' XML are generated once and kept in live/myos-wm/.
+wlroots-dev
+wayland-dev
+wayland-protocols
+libxkbcommon-dev
+pixman-dev
+libdrm-dev
+libxcb-dev
+xcb-util-wm-dev
+gtk-layer-shell-dev

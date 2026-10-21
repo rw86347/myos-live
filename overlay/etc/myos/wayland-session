@@ -1,0 +1,33 @@
+#!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
+# wayland-session — the Wayland desktop (the login screen's "MyOS (Wayland,
+# preview)"), as the user who logged in. myos-login has stopped its X server,
+# started seatd, and made XDG_RUNTIME_DIR. When this exits, the login screen
+# comes back.
+
+mkdir -p "$HOME/.local/state"
+errfile="$HOME/.local/state/myos-wm.log"
+if ( umask 077 && : > "$errfile" ) 2>/dev/null; then
+    exec > "$errfile" 2>&1
+fi
+
+# wlroots: draw with the CPU (there is no GPU driver, only dumb buffers on
+# /dev/dri/card0), and get the screen and input through seatd.
+export WLR_RENDERER=pixman
+export WLR_DRM_DEVICES=/dev/dri/card0
+export WLR_NO_HARDWARE_CURSORS=1
+export LIBSEAT_BACKEND=seatd
+
+# Programs pick Wayland where they can, X11 (through XWayland) otherwise.
+export GDK_BACKEND=wayland,x11
+export MOZ_ENABLE_WAYLAND=1
+export SDL_VIDEODRIVER=wayland,x11
+export XDG_CURRENT_DESKTOP=MyOS
+
+# As in xsession: Firefox's sandboxes need what this kernel lacks.
+export MOZ_DISABLE_CONTENT_SANDBOX=1
+export MOZ_DISABLE_GMP_SANDBOX=1
+export MOZ_WEBRENDER=0
+
+exec myos-wm

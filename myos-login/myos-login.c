@@ -11,6 +11,13 @@
  * When the session ends this program exits, and runit starts it again —
  * which gives the next person a fresh X server, as xdm does.
  *
+ * Two desktops, picked on the bottom band ("Desktop: ..."; the choice is
+ * remembered): the classic X11 one, run inside this X server, and the
+ * Wayland preview (myos-wm, live/myos-wm). Wayland has no X server under
+ * it, so for that one this X server is stopped first; seatd, started
+ * here as root, then gives the user's window server the screen, keyboard
+ * and mouse, and takes them back when the session ends.
+ *
  * The look is the "Golden Hour" theme (live/assets/themes/golden-hour): a
  * blurred photograph with a dark band at the top and bottom, the MyOS logo
  * on the left, and the machine's users on the right. The drawing is built
@@ -53,6 +60,11 @@
 
 #define ART     "/usr/share/myos/login"
 #define SESSION "/etc/myos/xsession"
+#define WAYLAND_SESSION "/etc/myos/wayland-session"
+#define WAYLAND_WM      "/usr/bin/myos-wm"
+#define SEATD           "/usr/bin/seatd"
+#define CHOICE_DIR      "/var/lib/myos-login"
+#define CHOICE_FILE     CHOICE_DIR "/session"   /* "wayland" or "x11": the last one used */
 #define XSERVER "/usr/bin/X"
 #define XAUTH_DIR  "/run/myos-login"        /* root's alone (0700) */
 #define XAUTH_FILE XAUTH_DIR "/X0.auth"     /* the server's copy of the cookie */
@@ -98,6 +110,8 @@ static struct {
     int passlen;
     int failed;
     const char *note;               /* something to say instead of the hint */
+    int has_wayland;                /* the Wayland desktop is installed */
+    int wayland;                    /* and is the one picked */
 } ui;
 
 static pid_t xpid;
@@ -519,6 +533,46 @@ static void draw_users(void)
     }
 }
 
+/* The desktop chooser, in the middle of the bottom band. */
+static void draw_session(void)
+{
+    if (!ui.has_wayland)
+        return;
+    int x = ui.w / 2 - sc(170), y = ui.h - sc(56);
+    XCopyArea(ui.dpy, ui.still, ui.win, DefaultGC(ui.dpy, ui.screen), x, y, sc(340), sc(40), x, y);
+    const char *name = ui.wayland ? "Desktop: MyOS (Wayland, preview)" : "Desktop: MyOS Classic (X11)";
+    XGlyphInfo ext;
+    XftTextExtentsUtf8(ui.dpy, ui.f_small, (const FcChar8 *)name, strlen(name), &ext);
+    text_shadow(ui.win, ui.f_small, 0xffffff, ui.w / 2 - ext.xOff / 2, ui.h - sc(34), name, 0);
+    static const char hint[] = "click to change";
+    XftTextExtentsUtf8(ui.dpy, ui.f_sub, (const FcChar8 *)hint, strlen(hint), &ext);
+    text(ui.win, ui.f_sub, TEAL_LIGHT, 217, ui.w / 2 - ext.xOff / 2, ui.h - sc(18), hint, 0);
+}
+
+static void read_choice(void)
+{
+    ui.has_wayland = access(WAYLAND_SESSION, R_OK) == 0 && access(WAYLAND_WM, X_OK) == 0 &&
+                     access(SEATD, X_OK) == 0;
+    char buf[16] = "";
+    FILE *f = fopen(CHOICE_FILE, "r");
+    if (f) {
+        if (!fgets(buf, sizeof buf, f))
+            buf[0] = 0;
+        fclose(f);
+    }
+    ui.wayland = ui.has_wayland && strncmp(buf, "wayland", 7) == 0;
+}
+
+static void save_choice(void)
+{
+    mkdir(CHOICE_DIR, 0755);
+    FILE *f = fopen(CHOICE_FILE, "w");
+    if (f) {
+        fputs(ui.wayland ? "wayland\n" : "x11\n", f);
+        fclose(f);
+    }
+}
+
 /* Forget what was typed, and any message about the last attempt. */
 static void reset_entry(void)
 {
@@ -531,6 +585,7 @@ static void redraw(void)
 {
     XCopyArea(ui.dpy, ui.still, ui.win, DefaultGC(ui.dpy, ui.screen), 0, 0, ui.w, ui.h, 0, 0);
     draw_users();
+    draw_session();
     XFlush(ui.dpy);
 }
 
@@ -552,10 +607,116 @@ static int conversation(int n, const struct pam_message **msg,
 
 static int write_xauth(const char *path);      /* the X cookie (below) */
 
+/* In a new child: become the user (groups, uid, home, environment).
+   Exits the child if it can't. */
+static void become_user(const struct passwd *pw, char **pamenv)
+{
+    if (initgroups(pw->pw_name, pw->pw_gid) < 0 || setgid(pw->pw_gid) < 0 ||
+        setuid(pw->pw_uid) < 0)
+        _exit(1);
+    if (chdir(pw->pw_dir) < 0 && chdir("/") < 0)
+        _exit(1);
+    for (char **e = pamenv; e && *e; e++)
+        putenv(*e);
+    setenv("HOME", pw->pw_dir, 1);
+    setenv("USER", pw->pw_name, 1);
+    setenv("LOGNAME", pw->pw_name, 1);
+    setenv("SHELL", pw->pw_shell, 1);
+    /* Alpine's /etc/profile PATH: the sbin folders too, so ifconfig,
+       ip and the like are found without typing /sbin/. */
+    setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 1);
+}
+
+/* What udevd would have written: libinput (through eudev's libudev) only
+   uses an input device that has an entry in udev's database, so make one
+   per /sys/class/input/eventN, holding the ID_INPUT tags the kernel puts
+   in the node's uevent file. */
+static void make_udev_db(void)
+{
+    mkdir("/run/udev", 0755);
+    mkdir("/run/udev/data", 0755);
+    for (int n = 0; n < 32; n++) {
+        char path[96], line[128], db[64];
+        snprintf(path, sizeof path, "/sys/class/input/event%d/uevent", n);
+        FILE *in = fopen(path, "r");
+        if (!in)
+            continue;
+        unsigned major = 0, minor = 0;
+        char tags[512] = "";
+        size_t used = 0;
+        while (fgets(line, sizeof line, in)) {
+            if (sscanf(line, "MAJOR=%u", &major) == 1 || sscanf(line, "MINOR=%u", &minor) == 1)
+                continue;
+            if (strncmp(line, "ID_", 3) == 0 && used + strlen(line) + 3 < sizeof tags)
+                used += snprintf(tags + used, sizeof tags - used, "E:%s", line);
+        }
+        fclose(in);
+        snprintf(db, sizeof db, "/run/udev/data/c%u:%u", major, minor);
+        FILE *out = fopen(db, "w");
+        if (out) {
+            fprintf(out, "I:1\n%s", tags);
+            fclose(out);
+        }
+    }
+}
+
+/* The Wayland desktop. Our X server goes first (a Wayland window server
+   is the only one on the screen); seatd, as root, then opens the screen,
+   keyboard and mouse for the user's session and takes them back when it
+   ends. Wayland programs find their server's socket in XDG_RUNTIME_DIR,
+   a folder only the user can enter (elogind would make it; we have none).
+   Returns how many seconds the session lasted. */
+static long run_wayland(pam_handle_t *pamh, const struct passwd *pw, char **pamenv)
+{
+    XCloseDisplay(ui.dpy);
+    ui.dpy = NULL;
+    kill(xpid, SIGTERM);
+    waitpid(xpid, NULL, 0);
+    xpid = 0;
+
+    make_udev_db();
+    unlink("/run/seatd.sock");
+    pid_t seatd = fork();
+    if (seatd == 0) {
+        execl(SEATD, "seatd", "-g", "video", (char *)NULL);
+        _exit(127);
+    }
+    for (int i = 0; i < 50 && access("/run/seatd.sock", F_OK) < 0; i++)
+        usleep(100000);
+
+    char rundir[64];
+    snprintf(rundir, sizeof rundir, "/run/user/%u", (unsigned)pw->pw_uid);
+    mkdir("/run/user", 0755);
+    mkdir(rundir, 0700);
+    if (chown(rundir, pw->pw_uid, pw->pw_gid) < 0 || chmod(rundir, 0700) < 0)
+        say("can't make the session's runtime folder");
+    time_t started = time(NULL);
+    pid_t pid = fork();
+    if (pid < 0)
+        die("fork");
+    if (pid == 0) {
+        become_user(pw, pamenv);
+        setenv("XDG_RUNTIME_DIR", rundir, 1);
+        setenv("XDG_SESSION_TYPE", "wayland", 1);
+        execl("/bin/sh", "sh", WAYLAND_SESSION, (char *)NULL);
+        _exit(127);
+    }
+    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
+        ;
+    pam_close_session(pamh, 0);
+    if (seatd > 0) {
+        kill(seatd, SIGTERM);
+        waitpid(seatd, NULL, 0);
+    }
+    return (long)(time(NULL) - started);
+}
+
 /* Hand the screen to the user: their groups, their uid, their session.
    Returns how many seconds it lasted, when it has finished. */
 static long run_session(pam_handle_t *pamh, const struct passwd *pw, char **pamenv)
 {
+    if (ui.wayland)
+        return run_wayland(pamh, pw, pamenv);
     /* Out of the way: our window is override-redirect, so nothing the
        window manager does would ever cover it. */
     XUnmapWindow(ui.dpy, ui.win);
@@ -566,20 +727,7 @@ static long run_session(pam_handle_t *pamh, const struct passwd *pw, char **pame
     if (pid < 0)
         die("fork");
     if (pid == 0) {
-        if (initgroups(pw->pw_name, pw->pw_gid) < 0 || setgid(pw->pw_gid) < 0 ||
-            setuid(pw->pw_uid) < 0)
-            _exit(1);
-        if (chdir(pw->pw_dir) < 0 && chdir("/") < 0)
-            _exit(1);
-        for (char **e = pamenv; e && *e; e++)
-            putenv(*e);
-        setenv("HOME", pw->pw_dir, 1);
-        setenv("USER", pw->pw_name, 1);
-        setenv("LOGNAME", pw->pw_name, 1);
-        setenv("SHELL", pw->pw_shell, 1);
-        /* Alpine's /etc/profile PATH: the sbin folders too, so ifconfig,
-           ip and the like are found without typing /sbin/. */
-        setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 1);
+        become_user(pw, pamenv);
         setenv("DISPLAY", ":0", 1);
         /* The cookie, written as the user (their file, in their home; a
            home we can't write gets a private file in /tmp instead). */
@@ -639,6 +787,11 @@ static int try_login(void)
     long secs = run_session(pamh, pw, pamenv);
     pam_setcred(pamh, PAM_DELETE_CRED);
     pam_end(pamh, PAM_SUCCESS);
+    if (!ui.dpy) {                      /* Wayland: our X server is gone */
+        if (secs < 5)
+            say("the Wayland desktop would not start (see ~/.local/state/myos-wm.log)");
+        exit(0);                        /* runit starts a fresh login screen */
+    }
     /* A session that ends at once is a broken session, not a finished one:
        stay here and say so, rather than have runit restart us for ever. */
     if (secs < 5) {
@@ -776,11 +929,15 @@ static void open_window(void)
     imlib_context_set_anti_alias(1);
 }
 
-/* Which user tile is at this point, or -1; -2 for "Turn off MyOS". */
+/* Which user tile is at this point, or -1; -2 for "Turn off MyOS", -3 for
+   the desktop chooser. */
 static int hit(int x, int y)
 {
     if (y > ui.h - sc(80) && x < sc(240))
         return -2;
+    if (ui.has_wayland && y > ui.h - sc(56) && y < ui.h - sc(16) &&
+        x > ui.w / 2 - sc(170) && x < ui.w / 2 + sc(170))
+        return -3;
     for (int i = 0; i < ui.nusers; i++)
         if (x >= tile_x() && x < tile_x() + ui.tile_w &&
             y >= tile_y(i) && y < tile_y(i) + ui.tile_h)
@@ -832,6 +989,11 @@ static void event_loop(void)
             int n = hit(ev.xbutton.x, ev.xbutton.y);
             if (n == -2) {
                 power_off();
+            } else if (n == -3) {
+                ui.wayland = !ui.wayland;
+                save_choice();
+                draw_session();
+                XFlush(ui.dpy);
             } else if (n >= 0 && n != ui.selected) {
                 ui.selected = n;
                 reset_entry();
@@ -879,6 +1041,7 @@ int main(void)
 {
     read_users();
     read_passwords();
+    read_choice();
     if (!ui.nusers) {
         fprintf(stderr, "myos-login: no user to log in as (none with uid 1000 or more)\n");
         return 1;
