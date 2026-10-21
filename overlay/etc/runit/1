@@ -71,4 +71,4 @@ fi
 [ -s /etc/machine-id ] || dbus-uuidgen --ensure=/etc/machine-id 2>/dev/null
 
 hostname -F /etc/hostname 2>/dev/null
-echo "MyOS is up."
+echo "MyOS is up." > /dev/tty1         # the screen (the console is the serial port)

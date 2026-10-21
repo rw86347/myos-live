@@ -1,1 +1,16 @@
-runit-init
+#!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
+# Process 1. The screen stays on the kernel's step list until login
+# (agetty is started with --noclear). runit writes "booting" and
+# "enter stage" on its stderr; those go to the boot log, and stage 1
+# inherits that, so "MyOS is up." is in the log too. Login and
+# "starting the X server" open /dev/console themselves.
+# If the log cannot be opened, runit keeps the console.
+# runit opens /dev/console again itself, so first that goes to the serial
+# port (myos-console: ioctl TIOCCONS): the screen keeps the steps, and
+# only what is written to tty1 ("MyOS is up.", errors) joins them.
+/usr/libexec/myos-console /dev/ttyS0 2>/dev/null
+mkdir -p /var/log 2>/dev/null
+command exec >>/var/log/init.log 2>&1
+exec /sbin/runit-init "$@"

@@ -1,7 +1,11 @@
 #!/bin/sh
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Rodger Wilson
-# A login prompt on the console: the screen and keyboard. (MyOS's kernel has
-# one terminal, /dev/console, so far; agetty-tty1 and agetty-ttyS0 are ready
-# for when it has virtual terminals and a serial device node.)
+# A text login on the console. /sbin/init points /dev/console at the serial
+# port, so this is the serial port's login; with no desktop (nodesktop) the
+# login is on tty1, the screen. (Keys reach both: the kernel has one
+# terminal behind the console, tty0-7 and ttyS0.)
+if grep -qw nodesktop /proc/cmdline 2>/dev/null; then
+    exec agetty --noclear tty1 linux
+fi
 exec agetty --noclear -L console linux

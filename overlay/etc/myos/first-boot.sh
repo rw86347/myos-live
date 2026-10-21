@@ -16,7 +16,8 @@ export PATH
 dir=/etc/myos/first-boot
 log=/var/log/first-boot.log
 
-echo "First boot: finishing the install (log: $log)"
+# On the screen: a stick that never ran live-prepare spends minutes here.
+echo "First boot: finishing the install (log: $log)" > /dev/tty1
 cd / || exit 1
 while read -r f ver pats; do
     args=$ver

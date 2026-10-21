@@ -10,5 +10,5 @@
     echo "myos-login stopped (exit code $1). The X server's errors:"
     grep -E '\(EE\)|Fatal' /var/log/Xorg.0.log 2>/dev/null | grep -v 'warning, (EE)' | tail -n 15
     echo "Trying again in 10 seconds."
-} > /dev/console 2>&1
+} > /dev/tty1 2>&1
 sleep 10

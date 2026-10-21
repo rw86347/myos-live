@@ -406,6 +406,13 @@ $(XSETTINGS_BIN): live/myos-settings/myos-xsettings.c live/myos-settings/scale.h
 	@mkdir -p $(dir $@) $(BUILD)/live
 	$(CC) $(LOGIN_CFLAGS) -c $< -o $(BUILD)/live/myos-xsettings.o
 	$(call LIVE_LINK,$(BUILD)/live/myos-xsettings.o,-lX11)
+# /sbin/init's first step: /dev/console to the serial port (TIOCCONS), so
+# the boot screen shows the steps and "MyOS is up." and nothing else.
+CONSOLE_BIN := $(LIVE_EXTRA)/usr/libexec/myos-console
+$(CONSOLE_BIN): live/myos-console/myos-console.c | $(LIVE_SYSROOT)/.done
+	@mkdir -p $(dir $@) $(BUILD)/live
+	$(CC) $(LOGIN_CFLAGS) -c $< -o $(BUILD)/live/myos-console.o
+	$(call LIVE_LINK,$(BUILD)/live/myos-console.o,)
 # Settings' "Add User…": checks an administrator's password with PAM and
 # writes the account files. Setuid root, as passwd is.
 ADDUSER_BIN := $(LIVE_EXTRA)/usr/libexec/myos-adduser
@@ -554,14 +561,14 @@ $(LIVE_THEME): live/theme/make-live-theme.py live/assets/themes/golden-hour/make
 	@touch $@
 
 live-theme: $(LIVE_THEME)
-live-extra: $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(MENU_BIN) $(SETTINGS_BIN) $(XSETTINGS_BIN) $(ADDUSER_BIN) $(KCONFIG_BIN) $(INSTALL_BIN) $(HELPER_BIN) $(MKESP_BIN) $(FILES_BIN) $(PREVIEW_BIN) $(WIFI_BIN) $(DESKTOP_BIN) $(WP_BIN) $(RM_BIN) $(TRASH_BIN) $(VOLUME_BIN) $(FORCEQUIT_BIN) $(CHOOSE_BIN) $(PLAYER_BIN) $(WM_BIN)
+live-extra: $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(CONSOLE_BIN) $(MENU_BIN) $(SETTINGS_BIN) $(XSETTINGS_BIN) $(ADDUSER_BIN) $(KCONFIG_BIN) $(INSTALL_BIN) $(HELPER_BIN) $(MKESP_BIN) $(FILES_BIN) $(PREVIEW_BIN) $(WIFI_BIN) $(DESKTOP_BIN) $(WP_BIN) $(RM_BIN) $(TRASH_BIN) $(VOLUME_BIN) $(FORCEQUIT_BIN) $(CHOOSE_BIN) $(PLAYER_BIN) $(WM_BIN)
 
 # The live disk: like `make hd`, but myos-root holds the live userland
 # (live/tools/mklivehd.sh: owners, setuid bits and case-only names kept).
 # Every overlay file is a prerequisite. Names may have spaces ("My Files.desktop"
 # in the Programs menu): find's output is escaped so make keeps each one whole.
 OVERLAY_DEPS := $(shell find live/overlay live/overlay.local -type f 2>/dev/null | sed 's/ /\\ /g')
-$(LIVE_TAR): $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(MENU_BIN) $(SETTINGS_BIN) $(XSETTINGS_BIN) $(ADDUSER_BIN) $(KCONFIG_BIN) $(INSTALL_BIN) $(HELPER_BIN) $(MKESP_BIN) $(FILES_BIN) $(PREVIEW_BIN) $(WIFI_BIN) $(DESKTOP_BIN) $(WP_BIN) $(RM_BIN) $(TRASH_BIN) $(VOLUME_BIN) $(FORCEQUIT_BIN) $(CHOOSE_BIN) $(PLAYER_BIN) $(WM_BIN) $(LIVE_LOCK) $(OVERLAY_DEPS)
+$(LIVE_TAR): $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(CONSOLE_BIN) $(MENU_BIN) $(SETTINGS_BIN) $(XSETTINGS_BIN) $(ADDUSER_BIN) $(KCONFIG_BIN) $(INSTALL_BIN) $(HELPER_BIN) $(MKESP_BIN) $(FILES_BIN) $(PREVIEW_BIN) $(WIFI_BIN) $(DESKTOP_BIN) $(WP_BIN) $(RM_BIN) $(TRASH_BIN) $(VOLUME_BIN) $(FORCEQUIT_BIN) $(CHOOSE_BIN) $(PLAYER_BIN) $(WM_BIN) $(LIVE_LOCK) $(OVERLAY_DEPS)
 	python3 live/tools/fetch-live.py --arch $(ALPINE_ARCH)
 ifeq ($(ARCH),x86_64)
 $(LIVE_HD): $(LIVE_TAR) live/tools/mklivehd.sh
@@ -574,7 +581,7 @@ live-hd: $(LIVE_HD)
 
 # RAM login for a UEFI stick when the kernel cannot see the ext2 root.
 # The Pentium floppy initrd stays BusyBox. WritePerfect is left on disk.
-$(LIVE_LOGIN_TAR): $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(MENU_BIN) $(XSETTINGS_BIN) $(WIFI_BIN) \
+$(LIVE_LOGIN_TAR): $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(CONSOLE_BIN) $(MENU_BIN) $(XSETTINGS_BIN) $(WIFI_BIN) \
                    $(RM_BIN) $(LIVE_LOCK) live/tools/fetch-live.py \
                    $(OVERLAY_DEPS)
 	python3 live/tools/fetch-live.py --arch $(ALPINE_ARCH) --login-root

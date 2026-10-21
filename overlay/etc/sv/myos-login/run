@@ -8,7 +8,7 @@
 # A kernel built with CMDLINE=nodesktop: no X, so the text console shows
 # what happens (debugging on a machine with no serial port). Log in there.
 if grep -qw nodesktop /proc/cmdline 2>/dev/null; then
-    echo "myos-login: nodesktop: no X; log in on this console" > /dev/console
+    echo "myos-login: nodesktop: no X; log in on this console" > /dev/tty1
     exec sleep 2147483647
 fi
 echo "myos-login: starting the X server and the login screen" > /dev/console
