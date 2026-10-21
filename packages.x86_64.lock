@@ -1,7 +1,7 @@
 # packages.lock — written by live/tools/fetch-live.py --update; do not edit.
 # Every package on the live disk, in install order, with the SHA-256 of
 # its .apk. The build refuses any download that doesn't match.
-world 48289d072ce9209416c4d2d37af7d027ed97a6f43983c118944f8c225761ac36
+world 144d0bac446d6f9de0eb8ecaa55e471a34b82f17baeeb160c9ebdddd53c7d9fd
 # group      package                          version              repo       sha256
 base         alpine-baselayout-data           3.6.5-r0             main       a3da0d6c15fadda2ffd0dcb622c4b86cc21076114fce959acb2ea4ea2a0361a1
 base         musl                             1.2.5-r3             main       70705bdeb1a8d54ee1ec7ce3b06f176206f4f3b105d86cf5576d74b8277adfa0
@@ -268,6 +268,23 @@ compositor   xcb-util                         0.4.1-r3             main       64
 compositor   xcb-util-image                   0.4.1-r0             community  20653ebe6c46a0457693d758691da124d3f602c81ce520494bd5c3472b9c43b5
 compositor   xcb-util-renderutil              0.3.10-r0            community  5bf18f03afa30d4cbef08023d27803b1cbe584100e904e1cac7dd67cf9046319
 compositor   picom                            10.2-r1              community  b9b3a05801c620466b2ed96bb25e8debd588d9b76275da24ee9dfb126b33485f
+wayland      mesa-gles                        24.0.9-r1            main       2a0c168bd327d2208040610a921d0c27202ffa6ec8f4fdd1777ebeb7cdb9d491
+wayland      libdisplay-info                  0.1.1-r0             community  60dfb63bd02f9712beb5afc16016bd8a5bd992ed0edaa155b1fe710467905f52
+wayland      libinput-libs                    1.25.0-r0            community  de5bd4ef160f5991251865a4499e105631dec48a8587ed8eff3a620f660da31e
+wayland      libelogind                       252.9-r5             community  54c02913c97d70d85477333499e5ba7d5e4c4c038888e2a8669ee70ea0a1b2e6
+wayland      libseat                          0.8.0-r0             community  bddd2e8a916efa5fb1fd38fec8532c99ebf2a742db69058d6c2fd2b3c4b98b26
+wayland      vulkan-loader                    1.3.261.1-r0         main       ff60f39747fe3453651e7dd32e215bc5922ebfb7d94b8ec35c85d264b3684ac1
+wayland      xcb-util-wm                      0.4.2-r0             community  350471d06aaf66c2cbde93aa657280253eea6a8dc0364aa3fe0811fadb3fb916
+wayland      wlroots                          0.17.4-r0            community  92c16da144b89e748acd32a10c90a9e6d3e2d95fbd3507e05d24373b58e738af
+wayland      seatd                            0.8.0-r0             community  2fb9d17605ccf416858c682429c809139caf9da2da15178a3b961c1d2cce716e
+wayland      libtirpc-conf                    1.3.4-r0             main       9dbfa12ee8a84889c7e3f29ee53bc039612ebab97db28db36d649a66fc3827b0
+wayland      libtirpc-nokrb                   1.3.4-r0             main       c04542d087405265d9dcc634561fed9d4931001d76942bf499f4b228f45349c8
+wayland      xwayland                         24.1.4-r0            community  d3a647bbe8e4b4447a2c0d447b1fabf85db74872a731ad148fff8f622b5de6c9
+wayland      ncurses-terminfo                 6.4_p20240420-r2     main       a55984e71b4b5a27c14baf3b855ac53b43c6bbace1c7da83d6101f54fd7c29b7
+wayland      utf8proc                         2.9.0-r0             community  b21010071fecf55eb51d6e9edd59bcda6c67f965c4a2b1a63e33c949f69d8cb6
+wayland      fcft                             3.1.8-r0             community  9c63ac79e1d4e40e04b0acb8c21c05d749cdcff0c8fec973cfbc807d9cd124fa
+wayland      foot                             1.17.2-r0            community  7b115f24358154878ba7220650e1f72d5c48be50ae6c461991959939594d8b15
+wayland      gtk-layer-shell                  0.8.2-r0             community  a41a2f33e25c151d6c26f85f96584c0c03afdf8fcbf62b5cbdd833475a929acf
 fonts        font-noto-cjk                    0_git20220127-r1     community  60f7159f60779f92468a4b2e59f9608f41238588ddddc2531d4b23111a44f68f
 fonts        font-opensans                    0_git20210927-r1     community  41c7c14657d018c361a26a704547b5571ab249410f8a161bcbe185073bbf7000
 input        dconf                            0.40.0-r5            community  2d2220dcc5ec5cbc2e9c32225edfc7112876a7e43db305a84ee98a7282223dbd
@@ -396,7 +413,6 @@ office       gpg-agent                        2.4.9-r0             main       68
 office       gpgsm                            2.4.9-r0             main       765e9110c2a0d7951cde206a0109f7ff1cd7e93c28d46dcebd55b939963049eb
 office       gpgme                            1.23.2-r1            community  9329747994a36265bbc259f8c63b5e2c6bd84103fda2d95b520a9ed4f0abf28c
 office       gpgmepp                          1.23.2-r1            community  6d1b241e1cdb3f7522ff9d5988a1cc065760f912985356c875ee1ea0f531e845
-office       vulkan-loader                    1.3.261.1-r0         main       ff60f39747fe3453651e7dd32e215bc5922ebfb7d94b8ec35c85d264b3684ac1
 office       gtk4.0                           4.14.4-r0            community  70bce16ec93f0c6be3f4624e96edd5a50d2500e1e9f5c33017c400e46bab16b2
 office       libhunspell                      1.7.2-r4             main       f513cf0a50c47c249c4ac70d20f9cba1f18de0ffb25e4029479cb31150a8ea96
 office       liblangtag                       0.6.7-r0             community  309ba00c4601b27cbaf499e23436db2c51054143c80bfaa98effca3e0df33bc4
@@ -652,6 +668,14 @@ build-only   icu-dev                          74.2-r1              main       57
 build-only   webkit2gtk-4.1-dev               2.44.1-r1            community  5f30f0e3bab0bb06191a3e9a3cad2ecdcfbc214a66d43e94719d8c800a50bbc3
 build-only   libsoup3-dev                     3.4.4-r0             community  9f1321c9e913cb75f6e352ff728fa3e969ab0afa36a32d3a8d551ed9339e856c
 build-only   librsvg-dev                      2.58.5-r0            community  45c1a085575bd67596360a6b565a36d2b7230d78e2bdbf9b60732955cedcf57c
+build-only   wlroots-dev                      0.17.4-r0            community  fdc72d6ae0f3cdcff14391e193cb17c681e348396803893dcf3e9cbd9ac2c496
+build-only   wayland-dev                      1.22.0-r4            main       4ae3d4c740819c2766d8fc9551919f3b67ecdb279af6beb2c97fa950ea17065d
+build-only   wayland-protocols                1.36-r0              main       3a859235ddef5d523cdf03153a71d3fda85426af51dd1fab288152a3aeb37f37
+build-only   libxkbcommon-dev                 1.7.0-r0             main       04d03206ccc388e9b4ecc9b98e9968dbc3769e1fc2d9cc44b0625f3842501a2a
+build-only   pixman-dev                       0.43.2-r0            main       ed41bce1c1e658d0cd4dfba2ec5a7729d2ee024b06dec0f17363283ed741cf48
+build-only   libdrm-dev                       2.4.120-r0           main       b61c61279b28dc4827cf0b05f067a36bdf6a1672c4dfb2e07cee79b09307cdea
+build-only   xcb-util-wm-dev                  0.4.2-r0             community  89997d6f98d1c3195a0b6e1036ed24160d693aa6678aab7667f1c3102a8e3504
+build-only   gtk-layer-shell-dev              0.8.2-r0             community  f96b5b34075a7fa449d61fb4c3f6f79f0bc60f419770b8e4c86a1f54c262710c
 wifi         libnl3                           3.9.0-r1             main       139dabb4fe0bad81d7285316361ade8cea633067ca8fde9f3bdf9f50d59122bf
 wifi         pcsc-lite-libs                   2.2.3-r0             main       069be1a1b0f619fd2820d10d1a60caefc432867c5957cbbf2a8d8679b05683e2
 wifi         wpa_supplicant                   2.10-r11             main       e97082196c401a54e14a0484916f86b75e8111882551301f30599eb3be0db710
@@ -665,6 +689,7 @@ input        dbus-daemon-launch-helper        1.14.10-r1           main       9e
 input        dconf-bash-completion            0.40.0-r5            community  d00a04145b7bafff06986f345853b86caefe6e6406d1948f4c3630383bcdbc5d
 base         findmnt                          2.40.1-r1            main       d3946d352689acfd4da18c73025a262a3c1968f09a130f782c0a46defe906374
 base         flock                            2.40.1-r1            main       1d021a144d66c6af9143009610b42eb588f68f7977c520d53ccd1a5ae78f6cf0
+wayland      foot-bash-completion             1.17.2-r0            community  31d5aa600cac7ef5312c6a47f653085c63d6c6d07edae4325642bb7d70851a88
 base         fstrim                           2.40.1-r1            main       490d3848249872417418a8d2f3435f74b5c4289c584fb0379bbb6378f08ba28a
 dev          gcc-gdb                          13.2.1_git20240309-r1 main       0e071aa8ddcb70ca5919644cbfacdb805bdf92f52d27b495bf3e53560b8579d1
 dev          git-bash-completion              2.45.4-r0            main       0fa79b7594f5454a70431d6f219de746309b1546d29f0d0dfcfb681b4805c2f6
