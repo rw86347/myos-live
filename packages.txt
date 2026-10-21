@@ -133,6 +133,16 @@ font-noto-cjk
 # stays DejaVu Sans, the mockups' own stand-in for Verdana.
 font-opensans
 
+[input]
+# Typing Chinese: IBus, with libpinyin's engine (it learns the words you
+# pick). Ctrl+Space switches English / 中文; /etc/myos/xsession starts it.
+# GTK programs through ibus-gtk3, the rest (xterm) through XIM. libpinyin's
+# dictionary is most of the 60 MB, so not in the RAM login image; on an
+# installed system it comes with the installer's Chinese option.
+ibus
+ibus-libpinyin
+ibus-gtk3
+
 [office]
 # AbiWord: a small word processor that opens .doc, .docx and .rtf.
 abiword

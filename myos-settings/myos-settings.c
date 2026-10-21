@@ -1039,6 +1039,10 @@ static void page_mouse(GtkWidget *page)
     row_value(g, "Switch windows", "Alt+Tab");
     row_value(g, "Terminal", "Ctrl+Alt+T");
     row_value(g, "Settings", "Ctrl+Alt+S");
+    /* IBus is on the live disk; an installed system has it only with the
+       installer's Chinese option. */
+    if (access("/usr/bin/ibus-daemon", X_OK) == 0)
+        row_value(g, "English / 中文 (pinyin)", "Ctrl+Space");
 
     gtk_box_pack_start(GTK_BOX(page),
                        label_new("The pointer grows with the desktop's size (Displays) too. Programs "

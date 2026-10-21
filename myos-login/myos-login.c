@@ -552,6 +552,29 @@ static int conversation(int n, const struct pam_message **msg,
 
 static int write_xauth(const char *path);      /* the X cookie (below) */
 
+/* $XDG_RUNTIME_DIR, as logind or elogind make it on Linux: /run/user/UID,
+   in RAM (/run is a tmpfs, /etc/runit/1), owned by the user, mode 0700.
+   dconf keeps a file there that it maps MAP_SHARED, which this kernel does
+   only for files in RAM; without it dconf falls back to ~/.cache on disk
+   and aborts, and with it every program that reads GSettings (IBus's
+   pinyin, GTK's file chooser). Made as root, before the switch to the user.
+   One made at an earlier login is kept if it is still theirs and private:
+   lstat, so a link someone put there is never followed. */
+static int make_runtime_dir(const struct passwd *pw, char *out, size_t size)
+{
+    struct stat st;
+    snprintf(out, size, "/run/user/%u", (unsigned)pw->pw_uid);
+    if (mkdir("/run/user", 0755) < 0 && errno != EEXIST)
+        return -1;
+    if (mkdir(out, 0700) < 0 && errno != EEXIST)
+        return -1;
+    if (lstat(out, &st) < 0 || !S_ISDIR(st.st_mode))
+        return -1;
+    if (st.st_uid != pw->pw_uid && chown(out, pw->pw_uid, pw->pw_gid) < 0)
+        return -1;
+    return chmod(out, 0700);
+}
+
 /* Hand the screen to the user: their groups, their uid, their session.
    Returns how many seconds it lasted, when it has finished. */
 static long run_session(pam_handle_t *pamh, const struct passwd *pw, char **pamenv)
@@ -566,6 +589,8 @@ static long run_session(pam_handle_t *pamh, const struct passwd *pw, char **pame
     if (pid < 0)
         die("fork");
     if (pid == 0) {
+        char runtime[64];
+        int have_runtime = make_runtime_dir(pw, runtime, sizeof runtime) == 0;
         if (initgroups(pw->pw_name, pw->pw_gid) < 0 || setgid(pw->pw_gid) < 0 ||
             setuid(pw->pw_uid) < 0)
             _exit(1);
@@ -581,6 +606,8 @@ static long run_session(pam_handle_t *pamh, const struct passwd *pw, char **pame
            ip and the like are found without typing /sbin/. */
         setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 1);
         setenv("DISPLAY", ":0", 1);
+        if (have_runtime)
+            setenv("XDG_RUNTIME_DIR", runtime, 1);
         /* The cookie, written as the user (their file, in their home; a
            home we can't write gets a private file in /tmp instead). */
         char xauth[512];

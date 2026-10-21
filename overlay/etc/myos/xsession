@@ -26,5 +26,13 @@ export MOZ_WEBRENDER=0
 # then stays in the background to apply changes. It must come before the
 # window manager, which reads the font DPI when it starts.
 myos-xsettings
+
+# Chinese input (IBus, Ctrl+Space), when it is installed. Before the desktop,
+# so every program it starts inherits the variables. IBus keeps its settings
+# with dconf, which needs $XDG_RUNTIME_DIR (myos-login makes it, in RAM).
+if command -v ibus-daemon > /dev/null; then
+    export GTK_IM_MODULE=ibus QT_IM_MODULE=ibus XMODIFIERS=@im=ibus
+    ibus-daemon --daemonize --replace --xim
+fi
 [ -x "$HOME/.xsession" ] && exec "$HOME/.xsession"
 exec icewm-session

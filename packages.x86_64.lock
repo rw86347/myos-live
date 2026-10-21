@@ -1,7 +1,7 @@
-# packages.lock — written by tools/fetch-live.py --update; do not edit.
+# packages.lock — written by live/tools/fetch-live.py --update; do not edit.
 # Every package on the live disk, in install order, with the SHA-256 of
 # its .apk. The build refuses any download that doesn't match.
-world 097fb6170e2b3bf4ce5bef2f794e2b799cec0469ce3fef023eea74b5b0c83a9e
+world 48289d072ce9209416c4d2d37af7d027ed97a6f43983c118944f8c225761ac36
 # group      package                          version              repo       sha256
 base         alpine-baselayout-data           3.6.5-r0             main       a3da0d6c15fadda2ffd0dcb622c4b86cc21076114fce959acb2ea4ea2a0361a1
 base         musl                             1.2.5-r3             main       70705bdeb1a8d54ee1ec7ce3b06f176206f4f3b105d86cf5576d74b8277adfa0
@@ -270,6 +270,25 @@ compositor   xcb-util-renderutil              0.3.10-r0            community  5b
 compositor   picom                            10.2-r1              community  b9b3a05801c620466b2ed96bb25e8debd588d9b76275da24ee9dfb126b33485f
 fonts        font-noto-cjk                    0_git20220127-r1     community  60f7159f60779f92468a4b2e59f9608f41238588ddddc2531d4b23111a44f68f
 fonts        font-opensans                    0_git20210927-r1     community  41c7c14657d018c361a26a704547b5571ab249410f8a161bcbe185073bbf7000
+input        dconf                            0.40.0-r5            community  2d2220dcc5ec5cbc2e9c32225edfc7112876a7e43db305a84ee98a7282223dbd
+input        iso-codes                        4.16.0-r0            main       8194af22b8f7d6e4ee440861c8ae275acc4df61bfffba32c739e04eef0f78112
+input        dbus                             1.14.10-r1           main       d8719e177bf2c980282180c0b29cc30d260ca080892b3d9781a54a849c410830
+input        gdbm                             1.23-r1              main       664869bd7b4c49112300f7b6685c49b75a7ceefc18710390ee7cb7d1b91361b5
+input        mpdecimal                        4.0.0-r0             main       3c6b10d2a7e61d6da6c887d0036c25673aaa5a4c21c96209d14e34f9be2c7384
+input        libpanelw                        6.4_p20240420-r2     main       a59804632b5218f73f635b746067fb8fdc94cc806bfc3b0fa8fc39444f4f91e9
+input        python3                          3.12.13-r0           main       70e91c27c022758c2c57d1c52ba5bb029776161847cc68907f388d79a4426147
+input        gobject-introspection            1.80.1-r2            main       1fec96e56262d0366b42cfa9d5e3b89ef1861a092caa7d25208e12ed1db9c5f9
+input        py3-gobject3                     3.48.2-r0            main       2710b7705ad27fe9bc063d2ba270623d9063c9c4e4e8de52e83d676148c2845c
+input        json-glib                        1.8.0-r1             community  03537c13259bcd6c357cc8c66dcff1357dac937f967faba2ea66d7a7ca8ecf54
+input        libdbusmenu-glib                 16.04.0-r6           community  0ff6078342928ee0dba29b57b3210b9d2b31bfd834b5f334166d76158ee7b797
+input        libdbusmenu-gtk3                 16.04.0-r6           community  054bd1f0ca4df5fa6557e033b1d74b987f9bb740d1511a862fe101629c89d230
+input        libnotify                        0.8.3-r1             community  223ca69ede0303261a11f7ceb5084cbf690bc19c5e3cb92770de5fea9a39bbf9
+input        ibus                             1.5.30-r0            community  162dd96e25829ec3e5726a10dceb4376de855c7362fac744112082fbe7ee5afc
+input        lzo                              2.10-r5              main       6d9eed48c20f6e2d73dd40df5102aad6473c82364f3560e9d5c09e281a525042
+input        kyotocabinet                     1.2.80-r0            community  324583953d686fcfa48cee3923f653308021da568f8670c39a6063801ff98d63
+input        libpinyin                        2.8.1-r1             community  9c07d93428740121e45214726526ce7d87dba408d7526027244c8f774d81a793
+input        ibus-libpinyin                   1.15.7-r0            community  e57e171637aacae14e2cd6dfb5870fa68edfc526081c91629414223d77e01167
+input        ibus-gtk3                        1.5.30-r0            community  5bfd25048b1a9b7d6d6cc0b0231482f122987b10b2697715c33e15d5a9e4c028
 office       enchant2-libs                    2.7.3-r0             community  9a6240c99ba980a2cf16d0e56feabb65f73b7b0b0ad21e3accb34fed76a8eb64
 office       libgsf                           1.14.52-r0           community  99866242e08221ad02afa0c8a6cad1759284a5b6307025398ea01628b8ce86e3
 office       libgpg-error                     1.49-r0              main       b97c14938f9381eb282b95f70718497c340f52ae057e08d98e4eda16925c816b
@@ -281,7 +300,6 @@ office       abiword                          3.0.5-r11            community  83
 office       icu-data-en                      74.2-r1              main       96f2612ecf9fac7acdb67eca17d72e91cec644da596ad878bbb8aab8394fa001
 office       icu-libs                         74.2-r1              main       b5a54aaeb5346ef4d773af48be30d5c88fce94f9a3a101dac1bb8b2f0afd806b
 office       bubblewrap                       0.10.0-r0            main       e404501447ee48cbf1f53de13fa8f22a0c5ed110aafb63e3c4b8e095164d997e
-office       dbus                             1.14.10-r1           main       d8719e177bf2c980282180c0b29cc30d260ca080892b3d9781a54a849c410830
 office       xdg-dbus-proxy                   0.1.5-r0             community  3d28be9f4ae2efad050be6075f5cb4ca3422d8e2d41e8b986dd83cc95937ffff
 office       gcr-base                         3.41.2-r1            community  4523d07955ebc9c6dd774ce0e963b52492c013f6c17a065572371b4ddf3c0c36
 office       gcr                              3.41.2-r1            community  c7fb2a747a2cb2f0a8984b8f7fa5d6c4af45cea8d098ba5c27b91e410fe8a444
@@ -354,10 +372,6 @@ office       webp-pixbuf-loader               0.2.7-r0             community  17
 office       libopenraw                       0.3.7-r1             community  25f0f1550182723e0713fc6071dc271cf0692984550d89353fc185f1cf59da8b
 office       libopenraw-pixbuf-loader         0.3.7-r1             community  43a27d6da163e35800aceb52dffb91555f15a27e7f620784ed5ba6fd26c7c76d
 office       libreoffice-lang-en_us           7.6.7.2-r0           community  dee44dcfa9ef69a8076c85de79f859c814e81f8bf1590074b9df5eed81696b7a
-office       gdbm                             1.23-r1              main       664869bd7b4c49112300f7b6685c49b75a7ceefc18710390ee7cb7d1b91361b5
-office       mpdecimal                        4.0.0-r0             main       3c6b10d2a7e61d6da6c887d0036c25673aaa5a4c21c96209d14e34f9be2c7384
-office       libpanelw                        6.4_p20240420-r2     main       a59804632b5218f73f635b746067fb8fdc94cc806bfc3b0fa8fc39444f4f91e9
-office       python3                          3.12.13-r0           main       70e91c27c022758c2c57d1c52ba5bb029776161847cc68907f388d79a4426147
 office       zxing-cpp                        2.2.1-r0             community  4136ed6dc72bf6f4f7afc3fded220a5fe8792095ed84a156d80aa313ac7677bf
 office       boost1.84-thread                 1.84.0-r1            main       3809484c0476f28266a2e52b42a8569f7f49a9b05c3a7e8b11ef0c738e32ea0e
 office       boost1.84-locale                 1.84.0-r1            main       785902eb99247800b7c27d046872dbae63dd107d6521b42f3c589d34f120b0d7
@@ -382,7 +396,6 @@ office       gpg-agent                        2.4.9-r0             main       68
 office       gpgsm                            2.4.9-r0             main       765e9110c2a0d7951cde206a0109f7ff1cd7e93c28d46dcebd55b939963049eb
 office       gpgme                            1.23.2-r1            community  9329747994a36265bbc259f8c63b5e2c6bd84103fda2d95b520a9ed4f0abf28c
 office       gpgmepp                          1.23.2-r1            community  6d1b241e1cdb3f7522ff9d5988a1cc065760f912985356c875ee1ea0f531e845
-office       iso-codes                        4.16.0-r0            main       8194af22b8f7d6e4ee440861c8ae275acc4df61bfffba32c739e04eef0f78112
 office       vulkan-loader                    1.3.261.1-r0         main       ff60f39747fe3453651e7dd32e215bc5922ebfb7d94b8ec35c85d264b3684ac1
 office       gtk4.0                           4.14.4-r0            community  70bce16ec93f0c6be3f4624e96edd5a50d2500e1e9f5c33017c400e46bab16b2
 office       libhunspell                      1.7.2-r4             main       f513cf0a50c47c249c4ac70d20f9cba1f18de0ffb25e4029479cb31150a8ea96
@@ -648,7 +661,8 @@ dev          android-tools-bash-completion    35.0.1-r3            community  6a
 base         blkid                            2.40.1-r1            main       26be26709fba19870c7bcfa1283f482f36817a8e495fa9065107105d1e17e61e
 office       bubblewrap-bash-completion       0.10.0-r0            main       091250fcb6565ccc994359ff6e9e9025dbbb8e3d121b631a7dbd44f344903a52
 base         cfdisk                           2.40.1-r1            main       21beecd298dce550a328bfbbe52f1e025668d4e7f73d7d2387c0816be49934f6
-office       dbus-daemon-launch-helper        1.14.10-r1           main       9e70d643bb4fc87c455bacddfd489b94cbbcf62f7fc0a868d30f0295c5a42679
+input        dbus-daemon-launch-helper        1.14.10-r1           main       9e70d643bb4fc87c455bacddfd489b94cbbcf62f7fc0a868d30f0295c5a42679
+input        dconf-bash-completion            0.40.0-r5            community  d00a04145b7bafff06986f345853b86caefe6e6406d1948f4c3630383bcdbc5d
 base         findmnt                          2.40.1-r1            main       d3946d352689acfd4da18c73025a262a3c1968f09a130f782c0a46defe906374
 base         flock                            2.40.1-r1            main       1d021a144d66c6af9143009610b42eb588f68f7977c520d53ccd1a5ae78f6cf0
 base         fstrim                           2.40.1-r1            main       490d3848249872417418a8d2f3435f74b5c4289c584fb0379bbb6378f08ba28a
@@ -657,6 +671,8 @@ dev          git-bash-completion              2.45.4-r0            main       0f
 dev          git-init-template                2.45.4-r0            main       4fd00e4d5d28b9df69468bac494753c1061e4df540f0381ef3fbbfae40153305
 desktop      glib-bash-completion             2.80.5-r0            main       c074e0470a78a0bddc078d92bbb0132ce993b2e5590ff13a9a3683d62100f8fe
 base         hexdump                          2.40.1-r1            main       0d7786cebb16d7b608092f97ff3428f959c67a8d02a56e6850f3053255ded57d
+input        ibus-bash-completion             1.5.30-r0            community  103432ed7370431ca2b28c91aa9a6ad335bca7f3b231d1716ea8f39b602a0bd8
+office       ibus-gtk4                        1.5.30-r0            community  f5dddceb786e78d43c253a038677af2641da39d179bb14c092cc6b5cd4a001dc
 base         iproute2-bash-completion         6.9.0-r0             main       bf3159f47321e69367b06dd4bf70b63d3b10888d6654bd60ace21b4da37f5f4f
 office       libreoffice-bash-completion      7.6.7.2-r0           community  b983cdd1aa3446720b943d635f52bc44ead121f850cbb3301a856d86e1a611a6
 base         logger                           2.40.1-r1            main       7dcad6016a6507711cb7938583cbb1fb6f659daf7ffb88554576263d698aea41
@@ -664,9 +680,9 @@ base         losetup                          2.40.1-r1            main       27
 base         lsblk                            2.40.1-r1            main       9e23cba696d3256fa6706d3d36ffd3bce27538358c65207a8298dd28038adbf0
 base         partx                            2.40.1-r1            main       4e9a1d9aba1e49ef442270d42f901eadf86494fdb0b9d60cde548d3b4c359473
 dev          py3-pip-bash-completion          24.0-r2              community  e3dc8ef81377879907d36b8689e3d5d6096d1425efb69ee1b2f20583d1792149
-office       python3-pycache-pyc0             3.12.13-r0           main       c662e43c95c1cd769f6c0e33a3f9bda348c9bc1f8d6c132ad9761d332e129bb8
-office       pyc                              3.12.13-r0           main       10659c3425987f5cddba32940221085afa9edc668ff837f2e7cdcf0c67f604b2
-office       python3-pyc                      3.12.13-r0           main       9a1b7a6d82d5d826665e80e5173a74a825e8464ba26629da8a9c57f53da832ae
+input        python3-pycache-pyc0             3.12.13-r0           main       c662e43c95c1cd769f6c0e33a3f9bda348c9bc1f8d6c132ad9761d332e129bb8
+input        pyc                              3.12.13-r0           main       10659c3425987f5cddba32940221085afa9edc668ff837f2e7cdcf0c67f604b2
+input        python3-pyc                      3.12.13-r0           main       9a1b7a6d82d5d826665e80e5173a74a825e8464ba26629da8a9c57f53da832ae
 dev          ripgrep-bash-completion          14.1.0-r0            community  ea283e97b3335b62f217fe645edb18dd7f5568bc4de7d2b002b2566a2d2be1a6
 base         libcap-ng                        0.8.5-r0             main       b1c58942c1a25bedad42e059de15f3c32cc3839ce549f9e255cae7a77333b082
 base         setpriv                          2.40.1-r1            main       ca83dd57f032753a0809bb6e33952b9fe6ce95a145855f535e328a4259537e04
@@ -674,6 +690,7 @@ base         sfdisk                           2.40.1-r1            main       d9
 base         util-linux-bash-completion       2.40.1-r1            main       5066cf05528286266bb3ba260eb8516884e46cc6a2fb8cdd3f23ac591827e2c0
 base         uuidgen                          2.40.1-r1            main       8f28d6362a72fab6d5c3b4beda3c70cd282b4e78b17403264587b7d0eb85d620
 base         wipefs                           2.40.1-r1            main       613ac8c722734976313052373997ce025da3812def19b74f70f20aa5f7c46f14
+input        ibus-pyc                         1.5.30-r0            community  cd5ab67ba0c344032e9f92ca3077da88382acb56fecc3d0dbf7e6146f0bace61
 dev          py3-packaging-pyc                24.0-r1              main       028b63050affe491c1005d73e62bfc38b26be445f711d98e002500057daee80d
 dev          py3-parsing-pyc                  3.1.2-r1             main       cf18fc35155021a9b92fd3593ea01e28ff1848de191bc0b545f5f56737ddb4d3
 dev          py3-pip-pyc                      24.0-r2              community  1b05576a0fde750d3d6bde71a1444f52d080b191e495839ff70c061a8bd7321a
