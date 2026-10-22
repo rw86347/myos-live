@@ -174,6 +174,7 @@ struct mc {
     struct wlr_scene_rect *dim;
     struct wlr_scene_tree *windows;
     struct wlr_scene_tree *bar_tree;
+    struct wlr_scene_rect *bar_glass;   /* the bar's smoked glass */
     struct wlr_scene_buffer *label; /* the hovered window's name */
     struct pixbuf *label_pic;
     struct view *hover;

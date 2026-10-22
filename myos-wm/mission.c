@@ -303,6 +303,8 @@ static void bar_apply(double e, double eb)
     /* The bar drops in from above the screen as Mission Control opens. */
     int drop = lerp_i(-bar_big_h, 0, e);
     wlr_scene_node_set_position(&m->bar_tree->node, 0, drop);
+    wlr_scene_node_set_position(&m->bar_glass->node, o->full.x, o->full.y);
+    wlr_scene_rect_set_size(m->bar_glass, o->full.width, lerp_i(BAR_SMALL, bar_big_h, eb));
     double k = (double)mini_w / (o->full.width ? o->full.width : 1);
     for (int i = 0; i < bar_n; i++) {
         struct wlr_box mb = lerp_b(pill[i], mini[i], eb);
@@ -1165,6 +1167,10 @@ void mc_init(void)
     m->dim = wlr_scene_rect_create(m->tree, 1, 1, black);
     m->windows = wlr_scene_tree_create(m->tree);
     m->bar_tree = wlr_scene_tree_create(m->tree);
+    /* First in the bar, so under the desktops: a slightly gray tint, like
+       smoked glass (premultiplied, as wlroots blends; myos-mission's too). */
+    static const float smoke[4] = {0.16f, 0.16f, 0.18f, 0.375f};
+    m->bar_glass = wlr_scene_rect_create(m->bar_tree, 1, 1, smoke);
     m->label = wlr_scene_buffer_create(m->tree, NULL);
     m->add_pic = draw_round_button(48, true);
     m->close_pic = draw_round_button(22, false);

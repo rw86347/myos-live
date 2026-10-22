@@ -415,6 +415,9 @@ int main(int argc, char **argv)
     srv.nspaces = 1;
     srv.spaces[0].tree = wlr_scene_tree_create(srv.spaces_root);
     snprintf(srv.spaces[0].name, sizeof srv.spaces[0].name, "Desktop 1");
+    /* Four desktops from the start, as IceWM has; the bar's + adds more. */
+    while (srv.nspaces < 4)
+        space_add();
 
     draw_curl_pics();
     srv.curl = wlr_scene_buffer_create(srv.curl_tree, srv.curl_pics[CURL_MAX - CURL_MIN + 1]->base);

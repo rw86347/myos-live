@@ -6,5 +6,7 @@
 # /etc/icewm, so a stray user file can hide /etc/icewm/preferences.)
 #
 # Workspaces are never shown on the taskbar. They still exist: Mission
-# Control will show them above the screen, as on the Mac.
+# Control (myos-mission) shows them above the screen, as on the Mac.
+# Always four, as the Wayland session starts with.
 TaskBarShowWorkspaces=0
+WorkspaceNames=" 1 ", " 2 ", " 3 ", " 4 "

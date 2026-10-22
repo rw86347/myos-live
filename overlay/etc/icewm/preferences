@@ -37,6 +37,10 @@ HideBordersMaximized=1
 # divider. myos-menu paints the tray over it (its color, the line, the
 # icons and the time).
 TaskBarShowStartMenu=1     # the picture; myos-menu takes its clicks
+# The same buttons on every desktop, as the Mac's Dock: a click on a window
+# that is on another desktop goes to that desktop (Shift+click brings the
+# window here instead).
+TaskBarShowAllWindows=1
 TaskBarShowWindowListMenu=0
 TaskBarShowShowDesktopButton=0
 TaskBarShowWorkspaces=0

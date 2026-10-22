@@ -22,10 +22,33 @@ export MOZ_DISABLE_CONTENT_SANDBOX=1
 export MOZ_DISABLE_GMP_SANDBOX=1
 export MOZ_WEBRENDER=0
 
+# Chromium draws its own title bar unless told otherwise. A new profile is
+# told by /usr/lib/chromium/initial_preferences; one from before that
+# (2026-10-22) is told here, once: after that it is the user's choice.
+chromium_cfg="$HOME/.config/chromium"
+if [ ! -e "$chromium_cfg/.myos-title-bar" ]; then
+    if [ -f "$chromium_cfg/Default/Preferences" ]; then
+        python3 - "$chromium_cfg/Default/Preferences" <<'EOF'
+import json, os, sys
+p = sys.argv[1]
+with open(p) as f:
+    d = json.load(f)
+d.setdefault("browser", {})["custom_chrome_frame"] = False
+with open(p + ".myos", "w") as f:
+    json.dump(d, f, separators=(",", ":"))
+os.replace(p + ".myos", p)
+EOF
+    fi
+    mkdir -p "$chromium_cfg" && : > "$chromium_cfg/.myos-title-bar"
+fi
+
 # The desktop's scale (Settings > Displays): myos-xsettings sets it up,
 # then stays in the background to apply changes. It must come before the
 # window manager, which reads the font DPI when it starts.
 myos-xsettings
+# Dim, then switch off, the screen when it isn't used: sooner the further
+# the battery slider is toward battery life (it goes to the background).
+command -v myos-idle > /dev/null && myos-idle
 
 # Chinese input (IBus, Ctrl+Space), when it is installed. Before the desktop,
 # so every program it starts inherits the variables. IBus keeps its settings

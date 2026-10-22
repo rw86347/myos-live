@@ -55,14 +55,18 @@ MENUS = os.path.join(OUT, "usr/share/myos/menu")
 ICONS = os.path.join(OUT, "usr/share/myos/icons")
 
 # Settings offers these, in percent; anything between is rounded to one.
-SCALES = (100, 125, 150, 175, 200)
+SCALES = (100, 125, 150, 175, 200, 225, 250, 275, 300)
 K = 1                   # the scale being drawn; set_scale() sets it
 ICEWM = MENU = None     # its theme and menu folders
 
 TITLE_H = 30            # the mockup's title bar
 BUTTON = 21             # the round buttons in it
 BAR_H = 40              # the taskbar
-TRAY_W = 150            # the mockup's tray: the last 150 px of the taskbar
+TRAY_W = 205            # the tray: the last 205 px of the taskbar (the mockup's 150,
+                        # widened for icons twice the mockup's size)
+TRAY_ICON = 36          # the tray's icons (the mockup's are 18)
+TRAY_WIFI, TRAY_VOLUME, TRAY_BATTERY = 10, 54, 98   # where each icon starts
+TRAY_ICON_Y = (BAR_H - TRAY_ICON) // 2
 RADIUS = 8              # the window's corners, in the mockup
 STROKE = 1.5            # the dark edge around them
 
@@ -667,8 +671,27 @@ def tray_picture(out):
     st = S("Tray", "normal")
     body = (mt.draw_bar(bar_style(), 0, 0, 1 + TRAY_W, BAR_H) +
             mt.draw_bar(st, 1, 0, TRAY_W, BAR_H) +
-            mt.img("tray-volume", 39, 11, 18))
+            mt.img("tray-volume", TRAY_VOLUME, TRAY_ICON_Y, TRAY_ICON))
     render("tray", body, 1 + TRAY_W, BAR_H, out)
+
+
+# The battery in the tray, on the 48-unit grid of the theme's icons: a white
+# outline and its nub, nothing inside. myos-menu fills the inside to the
+# charge left (menu.conf "battery": BATTERY_FILL, in the 18 px icon's pixels)
+# and draws nothing at all on a machine without a battery.
+BATTERY_OUTLINE = ('<rect x="3" y="13" width="36" height="22" rx="4" fill="none" '
+                   'stroke="#ffffff" stroke-width="3"/>'
+                   '<rect x="40" y="19" width="5" height="10" rx="1.5" fill="#ffffff"/>')
+BATTERY_FILL = (7, 17, 35, 31)          # left, top, right, bottom of the inside
+# While charging, a lightning bolt over it: white, edged dark so it shows on
+# the green fill as well as on the bar.
+BATTERY_BOLT = ('<path d="M25 6 L12 27 H21 L17 42 L32 20 H23 L28 6 Z" fill="#ffffff" '
+                'stroke="#163447" stroke-width="2.2" stroke-linejoin="round"/>')
+
+
+def battery_picture(name, drawing, out):
+    render(name, '<g transform="scale(%g)">%s</g>' % (TRAY_ICON / 48, drawing),
+           TRAY_ICON, TRAY_ICON, out)
 
 
 def start_menu():
@@ -716,13 +739,20 @@ def start_menu():
         render(name, mt.curl(S("Hot corner", state), c, 0), c, c, os.path.join(MENU, name + ".png"))
     conf.append("corner corner.png corner-hover.png")
     # The tray. clock is where "8:11 PM" sits: the center, the baseline, the
-    # size. The picture is one pixel wider than the tray (the divider's left
-    # half), so the center is 105, not 104.
+    # size; right of the three icons.
     tray_picture(os.path.join(MENU, "tray.png"))
     conf.append("tray tray.png")
-    conf.append("clock %d %d %d" % (px(105), px(25), px(12)))
-    conf.append("icon %d %d %d" % (px(13), px(11), px(18)))   # the docked icon's slot
-    conf.append("volume %d %d %d" % (px(39), px(11), px(18)))  # the speaker (tray_picture)
+    conf.append("clock %d %d %d" % (px(TRAY_BATTERY + TRAY_ICON + 36), px(25), px(12)))
+    icon = (px(TRAY_ICON_Y), px(TRAY_ICON))
+    conf.append("icon %d %d %d" % ((px(TRAY_WIFI),) + icon))      # the docked icon's slot
+    conf.append("volume %d %d %d" % ((px(TRAY_VOLUME),) + icon))  # the speaker (tray_picture)
+    # The battery: where, its size, its outline, the bolt while charging,
+    # and the inside it fills.
+    battery_picture("tray-battery", BATTERY_OUTLINE, os.path.join(MENU, "tray-battery.png"))
+    battery_picture("tray-bolt", BATTERY_BOLT, os.path.join(MENU, "tray-bolt.png"))
+    l, t, r, b = (px(v * TRAY_ICON / 48) for v in BATTERY_FILL)
+    conf.append("battery %d %d %d tray-battery.png tray-bolt.png %d %d %d %d"
+                % ((px(TRAY_BATTERY),) + icon + (l, t, r - l, b - t)))
     open(os.path.join(MENU, "menu.conf"), "w").write("\n".join(conf) + "\n")
 
 
