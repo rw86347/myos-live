@@ -406,10 +406,23 @@ $(LIVE_EXTRA)/usr/bin/myos-input: live/myos-input/myos-input.c live/common/menu_
 # Dimming, then the screen off, when nobody uses it (live/myos-idle): how
 # soon follows the battery slider and the charger.
 IDLE_BIN := $(LIVE_EXTRA)/usr/bin/myos-idle
-$(IDLE_BIN): live/myos-idle/myos-idle.c | $(LIVE_SYSROOT)/.done
+$(IDLE_BIN): live/myos-idle/myos-idle.c live/common/powerconf.h | $(LIVE_SYSROOT)/.done
 	@mkdir -p $(dir $@) $(BUILD)/live
-	$(CC) $(LOGIN_CFLAGS) -c $< -o $(BUILD)/live/myos-idle.o
+	$(CC) $(LOGIN_CFLAGS) -Ilive/common -c $< -o $(BUILD)/live/myos-idle.o
 	$(call LIVE_LINK,$(BUILD)/live/myos-idle.o,-lX11 -lXext)
+# Sleep (docs/SLEEP-PLAN.md): myos-powerd, root, from boot, turns the lid,
+# the power button and the Start menu's Sleep into /sys/power/state;
+# myos-lock is the lock screen it asks for first (through myos-idle).
+POWERD_BIN := $(LIVE_EXTRA)/usr/libexec/myos-powerd
+$(POWERD_BIN): live/myos-powerd/myos-powerd.c live/common/powerconf.h | $(LIVE_SYSROOT)/.done
+	@mkdir -p $(dir $@) $(BUILD)/live
+	$(CC) $(LOGIN_CFLAGS) -Ilive/common -c $< -o $(BUILD)/live/myos-powerd.o
+	$(call LIVE_LINK,$(BUILD)/live/myos-powerd.o,)
+LOCK_BIN := $(LIVE_EXTRA)/usr/bin/myos-lock
+$(LOCK_BIN): live/myos-lock/myos-lock.c live/common/powerconf.h live/common/xpic.h | $(LIVE_SYSROOT)/.done
+	@mkdir -p $(dir $@) $(BUILD)/live
+	$(CC) $(LOGIN_CFLAGS) -Ilive/common -c $< -o $(BUILD)/live/myos-lock.o
+	$(call LIVE_LINK,$(BUILD)/live/myos-lock.o,-lX11 -lXft -lImlib2 -lpam)
 # power_supply.h on the build machine: a made-up /sys, its times and health.
 .PHONY: test-power-supply
 test-power-supply:
@@ -641,14 +654,14 @@ $(LIVE_THEME): live/theme/make-live-theme.py live/assets/themes/golden-hour/make
 	@touch $@
 
 live-theme: $(LIVE_THEME)
-live-extra: $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(CONSOLE_BIN) $(MENU_BIN) $(SETTINGS_BIN) $(XSETTINGS_BIN) $(ADDUSER_BIN) $(KCONFIG_BIN) $(INSTALL_BIN) $(HELPER_BIN) $(MKESP_BIN) $(MANIFEST_BIN) $(RELEASE_FILE) $(FILES_BIN) $(PREVIEW_BIN) $(WIFI_BIN) $(DESKTOP_BIN) $(WP_BIN) $(RM_BIN) $(TRASH_BIN) $(VOLUME_BIN) $(BATTERY_BIN) $(IDLE_BIN) $(INPUT_BIN) $(FORCEQUIT_BIN) $(CHOOSE_BIN) $(PLAYER_BIN) $(WM_BIN) $(MISSION_BIN)
+live-extra: $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(CONSOLE_BIN) $(MENU_BIN) $(SETTINGS_BIN) $(XSETTINGS_BIN) $(ADDUSER_BIN) $(KCONFIG_BIN) $(INSTALL_BIN) $(HELPER_BIN) $(MKESP_BIN) $(MANIFEST_BIN) $(RELEASE_FILE) $(FILES_BIN) $(PREVIEW_BIN) $(WIFI_BIN) $(DESKTOP_BIN) $(WP_BIN) $(RM_BIN) $(TRASH_BIN) $(VOLUME_BIN) $(BATTERY_BIN) $(IDLE_BIN) $(POWERD_BIN) $(LOCK_BIN) $(INPUT_BIN) $(FORCEQUIT_BIN) $(CHOOSE_BIN) $(PLAYER_BIN) $(WM_BIN) $(MISSION_BIN)
 
 # The live disk: like `make hd`, but myos-root holds the live userland
 # (live/tools/mklivehd.sh: owners, setuid bits and case-only names kept).
 # Every overlay file is a prerequisite. Names may have spaces ("My Files.desktop"
 # in the Programs menu): find's output is escaped so make keeps each one whole.
 OVERLAY_DEPS := $(shell find live/overlay live/overlay.local -type f 2>/dev/null | sed 's/ /\\ /g')
-$(LIVE_TAR): $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(CONSOLE_BIN) $(MENU_BIN) $(SETTINGS_BIN) $(XSETTINGS_BIN) $(ADDUSER_BIN) $(KCONFIG_BIN) $(INSTALL_BIN) $(HELPER_BIN) $(MKESP_BIN) $(MANIFEST_BIN) $(RELEASE_FILE) $(FILES_BIN) $(PREVIEW_BIN) $(WIFI_BIN) $(DESKTOP_BIN) $(WP_BIN) $(RM_BIN) $(TRASH_BIN) $(VOLUME_BIN) $(BATTERY_BIN) $(IDLE_BIN) $(INPUT_BIN) $(FORCEQUIT_BIN) $(CHOOSE_BIN) $(PLAYER_BIN) $(WM_BIN) $(MISSION_BIN) $(LIVE_LOCK) live/tools/fetch-live.py $(OVERLAY_DEPS)
+$(LIVE_TAR): $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(CONSOLE_BIN) $(MENU_BIN) $(SETTINGS_BIN) $(XSETTINGS_BIN) $(ADDUSER_BIN) $(KCONFIG_BIN) $(INSTALL_BIN) $(HELPER_BIN) $(MKESP_BIN) $(MANIFEST_BIN) $(RELEASE_FILE) $(FILES_BIN) $(PREVIEW_BIN) $(WIFI_BIN) $(DESKTOP_BIN) $(WP_BIN) $(RM_BIN) $(TRASH_BIN) $(VOLUME_BIN) $(BATTERY_BIN) $(IDLE_BIN) $(POWERD_BIN) $(LOCK_BIN) $(INPUT_BIN) $(FORCEQUIT_BIN) $(CHOOSE_BIN) $(PLAYER_BIN) $(WM_BIN) $(MISSION_BIN) $(LIVE_LOCK) live/tools/fetch-live.py $(OVERLAY_DEPS)
 	python3 live/tools/fetch-live.py --arch $(ALPINE_ARCH)
 ifeq ($(ARCH),x86_64)
 $(LIVE_HD): $(LIVE_TAR) live/tools/mklivehd.sh

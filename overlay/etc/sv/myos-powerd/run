@@ -1,0 +1,8 @@
+#!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
+# myos-powerd: closing the lid, the power button and the Start menu's Sleep
+# put the computer to sleep (live/myos-powerd, docs/SLEEP-PLAN.md). Root,
+# from boot, so the login screen sleeps too. /etc/myos/power.conf says what
+# the lid and the button do.
+exec /usr/libexec/myos-powerd

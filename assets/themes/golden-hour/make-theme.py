@@ -225,6 +225,12 @@ ICONS["log-off"] = icon_svg([TEAL], ball("t", C["teal_btn_rim"]) + (
     '<g fill="none" stroke="%s" stroke-width="3.6" stroke-linecap="round">' % C["gold"] +
     '<circle cx="18" cy="19" r="6"/><path d="M22.5 23.5L34 35M29 30l3.5-3.5M32.5 33.5L36 30"/></g>'))
 
+# Sleep: a gold crescent moon and a star on the evening sky (the taskbar's navy).
+ICONS["sleep"] = icon_svg([lg("night", [(0, "#4a6fa5"), (1, C["bar_left"])])], ball("night", "#0a1f3a") + (
+    '<path d="M21.3 14A11 11 0 1 0 32.7 27.7A9 9 0 0 1 21.3 14z" fill="%s" stroke="#b36f00" '
+    'stroke-width="1.2" stroke-linejoin="round"/>' % C["gold"] +
+    '<path d="M33 11l1.2 2.8 2.8 1.2-2.8 1.2L33 19l-1.2-2.8-2.8-1.2 2.8-1.2z" fill="#ffffff"/>'))
+
 ICONS["turn-off"] = icon_svg([AMBER], ball("a", C["amber_rim"]) + (
     '<g fill="none" stroke="#ffffff" stroke-width="3.8" stroke-linecap="round">'
     '<path d="M16.5 16.5A11 11 0 1 0 31.5 16.5"/><path d="M24 11V24"/></g>'))
@@ -792,7 +798,8 @@ def mockup():
         o.append(text(mx + 262, y + 21, label, 13, hl["text"] if label == "Settings" else C["label_teal"], "bold"))
     o.append(d + '<path d="M%d %d h%d v38 a8 8 0 0 1-8 8 h-%d a8 8 0 0 1-8-8 z" fill="%s" stroke="%s" '
              'stroke-width="1.5"/>' % (mx, cy1, mw, mw - 16, fill, head["border"]))
-    for name, label, x in [("log-off", "Log off", mx + 170), ("turn-off", "Turn off", mx + 276)]:
+    for name, label, x in [("sleep", "Sleep", mx + 64), ("log-off", "Log off", mx + 170),
+                           ("turn-off", "Turn off", mx + 276)]:
         o.append(img(name, x, cy1 + 8, 30))
         o.append(text(x + 36, cy1 + 28, label, 13, "#ffffff", extra='filter="url(#labelshadow)"'))
 

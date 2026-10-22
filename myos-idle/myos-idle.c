@@ -31,6 +31,17 @@
  * read when it matters. A second alarm fires when the idle time drops
  * again (someone touched something) and brings the screen back.
  *
+ * Locking and sleep (docs/SLEEP-PLAN.md), as a Mac does:
+ *   - when the screen goes off it locks (myos-lock), unless power.conf's
+ *     lock_on_display_off=0;
+ *   - on battery, sleep_after_display_off_minutes (1) after that it asks
+ *     myos-powerd for sleep. Plugged in it doesn't, but looks again each
+ *     minute, so pulling the plug counts;
+ *   - myos-powerd, about to sleep, sends SIGUSR1: start myos-lock, which
+ *     tells powerd once it covers the screen; and SIGUSR2 when the
+ *     computer woke: the screen comes on, the lock is what it shows.
+ * The signals reach the X event loop through a pipe, so it can poll both.
+ *
  * Started by /etc/myos/xsession; one sleeping process.
  */
 #include <X11/Xlib.h>
@@ -39,11 +50,16 @@
 #include <X11/extensions/shape.h>
 #include <X11/extensions/sync.h>
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include "powerconf.h"
 
 #define PROFILE "/sys/firmware/acpi/platform_profile"
 #define SUPPLY  "/sys/class/power_supply"
@@ -61,6 +77,7 @@ static Window shade;                    /* the half-dark window, or None */
 static char bl_path[300];               /* .../brightness, or "" */
 static int saved = -1;                  /* the brightness before dimming */
 static int dpms;
+static int sig_pipe[2];
 enum { ACTIVE, DIMMED, OFF } state;
 
 /* --- what the settings say -------------------------------------------------- */
@@ -183,6 +200,28 @@ static void dim(void)
         XMapRaised(dpy, shade);
 }
 
+/* --- locking and sleep --------------------------------------------------------- */
+
+/* myos-lock, in the background. With --ack it writes "locked" to
+   myos-powerd once it holds the screen; one already up just says so. */
+static void lock(int ack)
+{
+    if (fork() == 0) {
+        execl("/usr/bin/myos-lock", "myos-lock", ack ? "--ack" : (char *)NULL, (char *)NULL);
+        _exit(127);
+    }
+}
+
+static void ask_sleep(void)
+{
+    int fd = open(POWER_FIFO, O_WRONLY | O_NONBLOCK | O_CLOEXEC);  /* ENXIO: no powerd */
+    if (fd >= 0) {
+        if (write(fd, "sleep\n", 6) != 6)
+            fprintf(stderr, "myos-idle: myos-powerd did not take the request\n");
+        close(fd);
+    }
+}
+
 static void screen_off(void)
 {
     if (saved >= 0)
@@ -192,6 +231,8 @@ static void screen_off(void)
     XForceScreenSaver(dpy, ScreenSaverActive);      /* black */
     if (dpms)
         DPMSForceLevel(dpy, DPMSModeOff);           /* and off, where the driver can */
+    if (power_conf_int("lock_on_display_off", 1))
+        lock(0);
 }
 
 static void screen_back(void)
@@ -230,13 +271,21 @@ static XSyncAlarm alarm_at(XSyncAlarm a, int ms, int positive)
 /* The idle time reached `at` ms. */
 static void waited(int at)
 {
+    int sleep_ms = power_conf_int("sleep_after_display_off_minutes", 1) * 60000;
     if (state == DIMMED) {
         state = OFF;
         screen_off();
+        if (sleep_ms > 0)
+            wait_alarm = alarm_at(wait_alarm, at + sleep_ms, 1);
         return;
     }
-    if (state != ACTIVE)
+    if (state == OFF) {                 /* the screen has been off a while */
+        if (sleep_ms > 0 && !plugged_in())
+            ask_sleep();
+        else if (sleep_ms > 0)
+            wait_alarm = alarm_at(wait_alarm, at + 60000, 1);  /* look again in a minute */
         return;
+    }
     int off = off_ms();
     if (off - DIM_MS > at)
         wait_alarm = alarm_at(wait_alarm, off - DIM_MS, 1);     /* this setting waits longer */
@@ -254,6 +303,29 @@ static void touched(void)
         screen_back();
     state = ACTIVE;
     wait_alarm = alarm_at(wait_alarm, FIRST_MS, 1);
+}
+
+/* Awake after sleep: the screen on, the idle time from zero (X's clock
+   left the sleep out, so it would carry on where it stopped), and the
+   lock screen told, so its clock shows the time now, not at sleep. */
+static void woke(void)
+{
+    XForceScreenSaver(dpy, ScreenSaverReset);
+    touched();
+    Window lock_win = XGetSelectionOwner(dpy, XInternAtom(dpy, "_MYOS_LOCK", False));
+    if (lock_win != None) {
+        XEvent m = { .xclient = { .type = ClientMessage, .window = lock_win, .format = 32,
+                                  .message_type = XInternAtom(dpy, "_MYOS_LOCK", False) } };
+        XSendEvent(dpy, lock_win, False, NoEventMask, &m);
+    }
+}
+
+static void on_signal(int sig)
+{
+    int e = errno;
+    ssize_t r = write(sig_pipe[1], sig == SIGUSR1 ? "l" : "w", 1);    /* full: one waits already */
+    (void)r;
+    errno = e;
 }
 
 int main(void)
@@ -294,18 +366,38 @@ int main(void)
     if (fork() > 0)
         _exit(0);
     setsid();
+    if (pipe2(sig_pipe, O_CLOEXEC | O_NONBLOCK) < 0) {
+        fprintf(stderr, "myos-idle: pipe: %s\n", strerror(errno));
+        return 1;
+    }
+    struct sigaction sa = { .sa_handler = on_signal, .sa_flags = SA_RESTART };
+    sigaction(SIGUSR1, &sa, NULL);
+    sigaction(SIGUSR2, &sa, NULL);
+    signal(SIGCHLD, SIG_IGN);           /* myos-lock: nobody waits for it */
 
     for (;;) {
-        XEvent e;
-        XNextEvent(dpy, &e);
-        if (e.type != ev + XSyncAlarmNotify)
-            continue;
-        XSyncAlarmNotifyEvent *a = (XSyncAlarmNotifyEvent *)&e;
-        if (a->state == XSyncAlarmDestroyed)
-            continue;
-        if (a->alarm == wait_alarm)
-            waited(XSyncValueLow32(a->counter_value));
-        else if (a->alarm == back_alarm)
-            touched();
+        while (XPending(dpy)) {         /* (also sends what we drew) */
+            XEvent e;
+            XNextEvent(dpy, &e);
+            if (e.type != ev + XSyncAlarmNotify)
+                continue;
+            XSyncAlarmNotifyEvent *a = (XSyncAlarmNotifyEvent *)&e;
+            if (a->state == XSyncAlarmDestroyed)
+                continue;
+            if (a->alarm == wait_alarm)
+                waited(XSyncValueLow32(a->counter_value));
+            else if (a->alarm == back_alarm)
+                touched();
+        }
+        struct pollfd p[2] = { { ConnectionNumber(dpy), POLLIN, 0 }, { sig_pipe[0], POLLIN, 0 } };
+        if (poll(p, 2, -1) < 0 && errno != EINTR)
+            return 1;
+        char c[8];
+        ssize_t n = p[1].revents & POLLIN ? read(sig_pipe[0], c, sizeof c) : 0;
+        for (ssize_t i = 0; i < n; i++)
+            if (c[i] == 'l')
+                lock(1);
+            else
+                woke();
     }
 }

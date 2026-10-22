@@ -5,8 +5,8 @@
  *
  * IceWM draws the taskbar and the window buttons, but its own Start menu
  * is a plain list and its clock is a flat rectangle the width of the time.
- * The theme's menu has two columns under a header with your name, and Log
- * off / Turn off along the bottom, so this program draws it, and the Start
+ * The theme's menu has two columns under a header with your name, and Sleep /
+ * Log off / Turn off along the bottom, so this program draws it, and the Start
  * button too. It also draws the tray at the right of the bar: the mockup's
  * color, the divider, the network and volume icons, the battery (on a
  * machine that has one: /sys/class/power_supply), and the time. How it

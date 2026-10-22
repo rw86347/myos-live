@@ -1,0 +1,5 @@
+# myos-lock: the lock screen checks its user's password the same way the
+# login screen does -- pam_unix against /etc/shadow, but as the user, so
+# pam_unix asks its setgid helper (unix_chkpwd, group shadow) to read it.
+# An account without a password opens through base-auth's "nullok".
+auth      include    base-auth

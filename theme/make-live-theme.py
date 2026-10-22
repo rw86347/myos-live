@@ -526,7 +526,7 @@ def login_pictures():
 
 # --- the start menu ---------------------------------------------------------------
 # IceWM's own menu is one list; the mockup's is two columns under a header
-# with the user's name, with Log off and Turn off along the bottom. So the
+# with the user's name, with Sleep, Log off and Turn off along the bottom. So the
 # menu is a program of ours (live/myos-menu), and its pictures are drawn
 # here with the design's own functions, in the design's own fonts: the
 # whole menu once, and each entry once more as it looks under the mouse.
@@ -555,6 +555,7 @@ MENU_RIGHT = [          # (icon, name, command); "@run" is the menu's own box
 ]
 PROG_H = 44             # All Programs, the strip above the footer (the mockup's row)
 MENU_FOOT = [           # (icon, name, x, command)
+    ("sleep", "Sleep", 64, "[ -p /run/myos/power ] && echo sleep > /run/myos/power"),
     ("log-off", "Log off", 170, "icesh logout"),
     ("turn-off", "Turn off", 276, "doas /sbin/poweroff"),
 ]
