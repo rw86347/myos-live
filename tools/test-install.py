@@ -5,8 +5,9 @@
 QEMU, start the new disk without the stick, and check the result.
 
   live/tools/test-install.py --image LIVE_IMG --e2fsck PATH --work DIR
-                        [--ovmf-code PATH --ovmf-vars PATH]
+                        [--ovmf-code PATH --ovmf-vars PATH] [--debugfs PATH]
                         [--machine q35|p2max|pc] [--disk nvme|sata|usb|ide] [--keep]
+                        [--upgrade]
 
 What it does, as a person would (docs/INSTALLER-PLAN.md, "make test-install"):
 
@@ -96,10 +97,13 @@ def main():
     a.add_argument("--ovmf-code")
     a.add_argument("--ovmf-vars")
     a.add_argument("--e2fsck", required=True)
+    a.add_argument("--debugfs")
     a.add_argument("--work", required=True)
     a.add_argument("--disk", choices=["nvme", "sata", "usb", "ide"], default="nvme")
     a.add_argument("--machine", choices=["q35", "p2max", "pc"], default="q35")
     a.add_argument("--keep", action="store_true", help="keep the installed disk")
+    a.add_argument("--upgrade", action="store_true",
+                   help="after installing, upgrade that disk from the stick")
     o = a.parse_args()
 
     bios = o.machine == "pc"
@@ -233,8 +237,158 @@ def main():
         ok("the installer is gone", rc == 0)
         rc, out = m.sh("ls -ld /home; ls /home", check=False)
         ok("/home holds the new user", TEST_USER in out, out)
+        if o.upgrade:
+            _, out = m.sh("uname -v", check=False)
+            ok("uname -v names this build", "MyOS" in out, out)
     finally:
         m.quit()
+
+    if o.upgrade:
+        def debugfs_write(offset, dest, text):
+            if not o.debugfs:
+                return False
+            src = os.path.join(o.work, "plant-%s.txt" % os.path.basename(dest))
+            cmds = os.path.join(o.work, "plant-%s.cmds" % os.path.basename(dest))
+            open(src, "w").write(text)
+            # debugfs's write won't replace a file: rm first (an error if
+            # it isn't there, which is fine). Then 644, owned by root.
+            open(cmds, "w").write("rm %s\nwrite %s %s\nsif %s mode 0100644\n"
+                                  "sif %s uid 0\nsif %s gid 0\n" %
+                                  (dest, src, dest, dest, dest, dest))
+            r = subprocess.run([o.debugfs, "-w", "-f", cmds,
+                                "%s?offset=%d" % (target, offset)],
+                               capture_output=True, text=True)
+            c = subprocess.run([o.debugfs, "-R", "cat %s" % dest,
+                                "%s?offset=%d" % (target, offset)],
+                               capture_output=True, text=True)
+            if c.stdout != text:
+                print("    debugfs: %s" % (r.stdout + r.stderr)[-400:])
+            return c.stdout == text
+
+        root_off = parts.get("myos-root", (None,))[0]
+        data_off = parts.get("myos-data", (None,))[0]
+        ok("plant a home file on myos-data",
+           root_off is not None and data_off is not None and
+           debugfs_write(data_off, "/home/%s/upgrade-kept" % TEST_USER, "keep-me\n"),
+           "need --debugfs")
+        ok("edit /etc/motd on myos-root",
+           debugfs_write(root_off, "/etc/motd", "edited-by-upgrade-test\n"))
+        ok("change a program on myos-root",
+           debugfs_write(root_off, "/usr/bin/ldd", "locally-changed\n"))
+
+        if bios:
+            with open(target, "rb") as f:
+                before_table = f.read(512)
+                f.seek(mbr[2][2] if len(mbr) > 2 else 0)
+                before_cfg = f.read(42 * 512)
+        else:
+            with open(target, "rb") as f:
+                before_table = f.read(34 * 512)
+            cfg = parts.get("myos-config")
+            with open(target, "rb") as f:
+                f.seek(cfg[0] if cfg else 0)
+                before_cfg = f.read(42 * 512)
+
+        print("test-install (%s): upgrading from the stick" % name)
+        m = Machine(base + stick + disk, os.path.join(o.work, "upgrade-%s.log" % name))
+        try:
+            m.expect(rb"the login screen is up", 900, "the live system's login screen")
+            m.login("myos", None)
+            dev = "/dev/" + find_target(m)
+            _, out = m.sh("/usr/libexec/myos-install-helper --probe", 600, check=False)
+            ok("--probe offers the upgrade (what the window asks with)",
+               any(l.startswith(dev + " upgradable ") for l in out.splitlines()), out)
+            plan = "\n".join([
+                "# myos-install plan v1", "mode=upgrade", "disk=" + dev,
+                "disk_name=test disk", "disk_bytes=%d" % (TARGET_GIB << 30),
+                "firmware=" + ("bios" if bios else "uefi"), "copy_wifi=0"])
+            m.sh("umask 077; rm -f /tmp/tu.plan; cat > /tmp/tu.plan <<'PLAN_END'\n%s\nPLAN_END" % plan)
+            t1 = time.time()
+            rc, out = m.sh("/usr/libexec/myos-install-helper --apply /tmp/tu.plan --stop-after copy",
+                           3600, check=False)
+            ok("the helper stops after copy (%.0f s)" % (time.time() - t1),
+               rc == 0 and "ok" in out, out[-1500:])
+            t1 = time.time()
+            rc, out = m.sh("/usr/libexec/myos-install-helper --apply /tmp/tu.plan", 3600, check=False)
+            steps = [l[5:] for l in out.splitlines() if l.startswith("step ")]
+            ok("the helper finishes the upgrade (%s; %.0f s)" % (" ".join(steps), time.time() - t1),
+               rc == 0 and "\nok" in "\n" + out, out[-1500:])
+            if rc:
+                _, log = m.sh("tail -40 /tmp/myos-install.log", check=False)
+                print(log)
+                raise Failed("the upgrade failed")
+            m.sh("rm -f /tmp/tu.plan; sync")
+        finally:
+            m.quit()
+
+        if bios:
+            with open(target, "rb") as f:
+                after_table = f.read(512)
+                f.seek(mbr[2][2] if len(mbr) > 2 else 0)
+                after_cfg = f.read(42 * 512)
+            ok("the MBR partition table is unchanged", after_table[446:] == before_table[446:])
+        else:
+            with open(target, "rb") as f:
+                after_table = f.read(34 * 512)
+            cfg = parts.get("myos-config")
+            with open(target, "rb") as f:
+                f.seek(cfg[0] if cfg else 0)
+                after_cfg = f.read(42 * 512)
+            ok("the GPT is unchanged", after_table == before_table)
+        ok("myos-config is unchanged", after_cfg == before_cfg)
+        for p in ("myos-root", "myos-data"):
+            if p in parts:
+                r = subprocess.run([o.e2fsck, "-fn", "%s?offset=%d" % (target, parts[p][0])],
+                                   capture_output=True, text=True)
+                ok("e2fsck after upgrade: %s is clean" % p, r.returncode == 0, r.stdout[-600:])
+
+        # The backup is root's alone (it holds /etc/shadow): read from here.
+        def data_cmd(cmd):
+            return subprocess.run([o.debugfs, "-R", cmd, "%s?offset=%d" % (target, data_off)],
+                                  capture_output=True, text=True).stdout
+        saved = [l.split()[-1] for l in data_cmd("ls -l /.myos-upgrade").splitlines()
+                 if l.split() and l.split()[-1][:2] == "20"]
+        ok("one saved folder in /data/.myos-upgrade", len(saved) == 1, str(saved))
+        if saved:
+            d = "/.myos-upgrade/" + saved[0]
+            diff = "\n" + data_cmd("cat %s/diff.txt" % d)
+            print("    " + "".join(l for l in diff.splitlines(True) if l.startswith(("#", "BYTES",
+                                                                                 "INODES", "BACKUP"))).replace("\n", "\n    "))
+            ok("the diff keeps the edited /etc/motd", "\nkeep etc/motd\n" in diff)
+            ok("the diff saves the changed /usr/bin/ldd", "\nchanged usr/bin/ldd\n" in diff)
+            ok("the old program is in the backup",
+               data_cmd("cat %s/replaced/usr/bin/ldd" % d) == "locally-changed\n")
+            ok("/etc is in the backup", "edited-by-upgrade-test" in data_cmd("cat %s/etc/motd" % d))
+
+        print("test-install (%s): starting the upgraded disk" % name)
+        if not bios:
+            shutil.copy(o.ovmf_vars, vars_fd)
+        m = Machine(base + boot, os.path.join(o.work, "upgraded-%s.log" % name))
+        try:
+            m.expect(rb"the login screen is up", 300, "the upgraded system's login screen")
+            m.login(TEST_USER, TEST_PASS)
+            _, out = m.sh("cat /home/%s/upgrade-kept; cat /etc/hostname" % TEST_USER)
+            ok("the home file is still there", "keep-me" in out, out)
+            ok("the computer name is unchanged", TEST_HOST in out, out)
+            _, out = m.sh("cat /etc/motd", check=False)
+            ok("/etc/motd is the edited copy", "edited-by-upgrade-test" in out, out)
+            rc, out = m.sh("cat /usr/bin/ldd", check=False)
+            ok("the changed program was replaced", "locally-changed" not in out, out[:200])
+            _, out = m.sh("cat /usr/lib/myos/release; uname -v", check=False)
+            ok("the release file is the stick's", "KERNEL_VERSION=" in out, out)
+            ok("uname -v is the stick's", "MyOS" in out, out)
+            rc, out = m.sh("grep -c '^myos:' /etc/passwd", check=False)
+            ok("the live user is gone", out.strip() == "0", out)
+            _, out = m.sh("id", check=False)
+            ok("the account is still an administrator (wheel)", "(wheel)" in out, out)
+            rc, out = m.sh("ls /etc/ssh/ssh_host_* 2>/dev/null | wc -l", check=False)
+            ok("the stick's ssh host keys didn't come along", out.strip() == "0", out)
+            rc, out = m.sh("test ! -e /usr/bin/myos-install", check=False)
+            ok("the installer is gone again", rc == 0)
+            rc, out = m.sh("test ! -e /data/.myos-upgrade/in-progress", check=False)
+            ok("the in-progress marker is gone", rc == 0)
+        finally:
+            m.quit()
 
     if not o.keep:
         os.unlink(target)

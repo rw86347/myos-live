@@ -42,6 +42,16 @@
  *   configure    the account, computer name, language, keyboard, clock; the
  *                live user, the stick's ssh keys and the installer removed.
  *   finish       everything written to the disk.
+ * A plan with mode=upgrade (docs/INSTALLER-PLAN.md, "Upgrading from the
+ * stick") writes no partition table and makes no file system:
+ *   check        the installed MyOS found, its space measured against
+ *                myos-manifest's diff (/run/myos-upgrade.diff)
+ *   save         /etc, the diff and the system files this machine changed,
+ *                to /data/.myos-upgrade/<date>, then its marker
+ *   copy         rsync of the stick but what the diff says to keep
+ *   merge        accounts: the stick's system ones, this disk's people
+ *   boot, finish as install's; the marker goes last.
+ *   myos-install-helper --probe             each disk: can it be upgraded?
  * Its mounts come off again at the end (unmount_all), so the new system
  * starts with its file systems marked cleanly unmounted, and after a failed
  * try the next one needs no restart.
@@ -59,6 +69,7 @@
 #include <sys/mount.h>
 #include <sys/random.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -69,10 +80,19 @@
 #ifndef BLKRRPART
 #define BLKRRPART   0x125F              /* _IO(0x12, 95): read the partition table again */
 #endif
+#ifndef BLKGETSIZE64
+#define BLKGETSIZE64 _IOR(0x12, 114, size_t)
+#endif
 
 #define NEWROOT     "/mnt/myos-root"
 #define LIVE_ESP    "/mnt/myos-live-esp"
 #define MKESP       "/usr/libexec/myos-mkesp"
+#define MANIFEST    "/usr/libexec/myos-manifest"
+#define RELEASE     "/usr/lib/myos/release"
+#define TGT_ESP     "/mnt/myos-tgt-esp"
+#define UPGRADE_DIFF "/run/myos-upgrade.diff"
+#define UPGRADE_DIR NEWROOT "/data/.myos-upgrade"
+#define SLACK       (128ULL * 1024 * 1024)
 #define ESP_NAME    "EFI System"
 #define GPT_ESP     "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
 #define GPT_LINUX   "0FC63DAF-8483-4772-8E79-3D69D8477DE4"
@@ -87,6 +107,7 @@
 
 static int logfd = -1;
 static int apply;
+static const char *stop_after;          /* test-only: --stop-after STEP */
 
 /* What this run will make, decided once from the disk as it is now. */
 static struct layout {
@@ -1048,8 +1069,15 @@ static int step_configure(const struct install_plan *p)
             lstat(NEWROOT "/home", &st) || !S_ISLNK(st.st_mode))
             return fail("Can't link /home to /data/home.");
         snprintf(home, sizeof home, NEWROOT "/data/home/%s", p->user);
-    } else
+    } else {
+        /* The stick's /home may be a link to its own myos-data: rsync
+           copied the link, which points at nothing here. */
+        struct stat st;
+        if (!lstat(NEWROOT "/home", &st) && S_ISLNK(st.st_mode) &&
+            (unlink(NEWROOT "/home") || mkdir(NEWROOT "/home", 0755)))
+            return fail("Can't make /home.");
         snprintf(home, sizeof home, NEWROOT "/home/%s", p->user);
+    }
     if (mkdir(home, 0700) && errno != EEXIST)
         return fail("Can't make the home folder.");
     {
@@ -1127,8 +1155,14 @@ static int step_configure(const struct install_plan *p)
                    "ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\n"
                    "update_config=1\n",
                    0600);
-    else
+    else {
+        if (access(STICK_WIFI, R_OK) == 0) {
+            char *cp[] = { "cp", STICK_WIFI, NEWROOT "/etc/wpa_supplicant/wpa_supplicant.conf", NULL };
+            if (run(cp))
+                logline("warning: the stick's Wi-Fi networks not copied");
+        }
         chmod(NEWROOT "/etc/wpa_supplicant/wpa_supplicant.conf", 0600);
+    }
     say("progress 95");
     return 0;
 }
@@ -1137,7 +1171,7 @@ static int step_configure(const struct install_plan *p)
    step never got that far) is fine; one still in use is logged and stays. */
 static void unmount_all(void)
 {
-    static const char *const at[] = { NEWROOT "/data", NEWROOT, LIVE_ESP, NULL };
+    static const char *const at[] = { NEWROOT "/data", NEWROOT, LIVE_ESP, TGT_ESP, NULL };
     for (int k = 0; at[k]; k++) {
         if (umount2(at[k], 0) == 0)
             logline("unmounted %s", at[k]);
@@ -1163,8 +1197,730 @@ static int step_finish(const struct install_plan *p)
     return 0;
 }
 
+static int part_path(const struct disk_info *d, const struct disk_part *q, char *out, size_t n)
+{
+    snprintf(out, n, "/dev/%s", q->name);
+    (void)d;
+    return is_block(out);
+}
+
+static int find_installed(const struct install_plan *p)
+{
+    struct disk_info disks[DISKS_MAX];
+    int n = disks_scan(disks, DISKS_MAX);
+    const struct disk_info *d = disks_find(disks, n, p->disk);
+    unsigned char mbr[512];
+
+    if (!d || !is_block(p->disk))
+        return fail("The disk %s isn't there (any more). Nothing was written.", p->disk);
+    if (d->running)
+        return fail("Refusing to upgrade the disk MyOS is running from.");
+    if (d->in_use)
+        return fail("That disk is still in use from an earlier try. Restart the "
+                    "computer, then upgrade again. Nothing was written.");
+    memset(&L, 0, sizeof L);
+    L.bios = p->firmware == FW_BIOS;
+    L.sectors = d->bytes / 512;
+    L.data = 1;
+    for (int i = 0; i < d->npart; i++) {
+        const struct disk_part *q = &d->parts[i];
+        char *slot = !strcmp(q->label, "myos-root") ? L.root
+                   : !strcmp(q->label, "myos-data") ? L.datadev
+                   : !strcmp(q->label, "myos-config") ? L.config
+                   : !strcmp(q->label, ESP_NAME) || q->is_esp ? L.esp : NULL;
+        if (slot && !slot[0])
+            part_path(d, q, slot, sizeof L.root);
+    }
+    if ((!L.root[0] || !L.datadev[0]) && L.bios) {
+        int fd = open(p->disk, O_RDONLY | O_CLOEXEC);
+        int got = fd >= 0 && pread(fd, mbr, sizeof mbr, 0) == (ssize_t)sizeof mbr;
+        if (fd >= 0)
+            close(fd);
+        if (got && mbr[510] == 0x55 && mbr[511] == 0xAA) {
+            unsigned long long root = 0, data = 0, config = 0;
+            for (int k = 0; k < 4; k++) {
+                const unsigned char *e = mbr + 446 + 16 * k;
+                unsigned long long start = le32(e + 8);
+                if (e[4] == 0x83 && !root)
+                    root = start;
+                else if (e[4] == 0x83)
+                    data = start;
+                else if (e[4] == 0xDA)
+                    config = start;
+            }
+            for (int i = 0; i < d->npart; i++) {
+                const struct disk_part *q = &d->parts[i];
+                char *slot = q->start == root ? L.root : q->start == data ? L.datadev
+                           : q->start == config ? L.config : NULL;
+                if (slot && !slot[0])
+                    snprintf(slot, sizeof L.root, "/dev/%s", q->name);
+            }
+        }
+    }
+    if (!L.root[0] || !L.datadev[0])
+        return fail("%s has no myos-root and myos-data. Nothing was written.", p->disk);
+    if (!L.bios && !L.esp[0])
+        return fail("%s has no EFI partition. Nothing was written.", p->disk);
+    logline("upgrade on %s: root %s data %s%s%s", p->disk, L.root, L.datadev,
+            L.esp[0] ? " esp " : "", L.esp);
+    return 0;
+}
+
+static int release_key(const char *path, const char *key, char *out, size_t n)
+{
+    FILE *f = fopen(path, "r");
+    char line[256], want[64];
+    int found = -1;
+
+    snprintf(want, sizeof want, "%s=", key);
+    out[0] = 0;
+    if (!f)
+        return -1;
+    while (found && fgets(line, sizeof line, f)) {
+        if (!strncmp(line, want, strlen(want))) {
+            line[strcspn(line, "\n")] = 0;
+            snprintf(out, n, "%s", line + strlen(want));
+            found = 0;
+        }
+    }
+    fclose(f);
+    return found;
+}
+
+static int mount_installed(int ro)
+{
+    unsigned long flags = ro ? MS_RDONLY : 0;
+    if (mkdir(NEWROOT, 0755) && errno != EEXIST)
+        return fail("Can't make %s.", NEWROOT);
+    if (mount(L.root, NEWROOT, "ext2", flags, NULL))
+        return fail("Can't mount myos-root %s (%s).", L.root, strerror(errno));
+    if (mount(L.datadev, NEWROOT "/data", "ext2", flags, NULL)) {
+        int e = errno;
+        umount2(NEWROOT, 0);
+        return fail("Can't mount myos-data %s (%s).", L.datadev, strerror(e));
+    }
+    return 0;
+}
+
+static int esp_has_microsoft(void)
+{
+    char path[300];
+    int has;
+
+    if (!L.esp[0])
+        return 0;
+    if (mkdir(TGT_ESP, 0700) && errno != EEXIST)
+        return 0;
+    if (mount(L.esp, TGT_ESP, "vfat", MS_RDONLY, NULL))
+        return 0;
+    snprintf(path, sizeof path, "%s/EFI/Microsoft", TGT_ESP);
+    has = access(path, F_OK) == 0;
+    umount2(TGT_ESP, 0);
+    return has;
+}
+
+static unsigned long long dev_bytes(const char *dev)
+{
+    unsigned long long n = 0;
+    int fd = open(dev, O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) {
+        if (ioctl(fd, BLKGETSIZE64, &n)) {
+            off_t end = lseek(fd, 0, SEEK_END);
+            n = end > 0 ? (unsigned long long)end : 0;
+        }
+        close(fd);
+    }
+    return n;
+}
+
+/* myos-manifest diff of the installed root against the stick, into
+   UPGRADE_DIFF: one "action path" line per file, then the totals. */
+static int manifest_diff(void)
+{
+    int fd, st = -1;
+    pid_t pid;
+
+    unlink(UPGRADE_DIFF);
+    fd = open(UPGRADE_DIFF, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd < 0)
+        return fail("Can't write %s (%s).", UPGRADE_DIFF, strerror(errno));
+    say("file comparing the installed system with the stick");
+    pid = fork();
+    if (pid == 0) {
+        dup2(fd, 1);
+        if (logfd >= 0)
+            dup2(logfd, 2);
+        execl("/usr/bin/python3", "python3", "-I", MANIFEST, "diff", NEWROOT, "/", (char *)NULL);
+        _exit(127);
+    }
+    close(fd);
+    if (pid < 0 || waitpid(pid, &st, 0) < 0 || !WIFEXITED(st) || WEXITSTATUS(st))
+        return fail("Comparing the installed system with the stick failed (see %s).",
+                    PLAN_LOG_DEFAULT);
+    return 0;
+}
+
+/* The totals at the end of the diff: bytes and inodes root needs on top of
+   what it has, bytes the backup on myos-data takes. */
+static int parse_need(unsigned long long *bytes, unsigned long long *inodes,
+                      unsigned long long *backup)
+{
+    FILE *f = fopen(UPGRADE_DIFF, "r");
+    char line[600];
+    int got = 0;
+
+    *bytes = *inodes = *backup = 0;
+    if (!f)
+        return -1;
+    while (fgets(line, sizeof line, f)) {
+        if (!strncmp(line, "BYTES=", 6))
+            *bytes = strtoull(line + 6, NULL, 10), got |= 1;
+        else if (!strncmp(line, "INODES=", 7))
+            *inodes = strtoull(line + 7, NULL, 10), got |= 2;
+        else if (!strncmp(line, "BACKUP=", 7))
+            *backup = strtoull(line + 7, NULL, 10), got |= 4;
+        else if (!strncmp(line, "# counts ", 9))
+            logline("upgrade: %s", line + 9);
+    }
+    fclose(f);
+    return got == 7 ? 0 : -1;
+}
+
+static int check_upgrade_space(void)
+{
+    struct statfs rootfs, datafs;
+    unsigned long long need = 0, inodes = 0, backup = 0;
+
+    if (statfs(NEWROOT, &rootfs) || statfs(NEWROOT "/data", &datafs))
+        return fail("Can't measure free space on the installed disk (%s).", strerror(errno));
+    if (manifest_diff())
+        return -1;
+    if (parse_need(&need, &inodes, &backup))
+        return fail("Can't tell how much room the upgrade needs.");
+    logline("upgrade need: %llu bytes, %llu inodes, backup %llu; root avail %llu inodes %llu",
+            need, inodes, backup,
+            (unsigned long long)rootfs.f_bavail * (unsigned long long)rootfs.f_bsize,
+            (unsigned long long)rootfs.f_ffree);
+    if ((unsigned long long)rootfs.f_bavail * (unsigned long long)rootfs.f_bsize < need + SLACK)
+        return fail("Root has not enough free space: this upgrade needs about %llu MB.",
+                    (need + SLACK) / (1024 * 1024));
+    if ((unsigned long long)rootfs.f_ffree < inodes + 1024)
+        return fail("Root has not enough free inodes for this upgrade.");
+    if ((unsigned long long)datafs.f_bavail * (unsigned long long)datafs.f_bsize < backup + (4ULL << 20))
+        return fail("myos-data has not enough room for the upgrade backup.");
+    if (L.bios) {
+        if (live_boot_area())
+            return -1;
+        if (L.boot_sectors > BOOT_SECTORS)
+            return fail("The stick's boot area is bigger than the %d MiB kept for it.", BOOT_AREA_MIB);
+    } else if (dev_bytes(L.esp) < 32ULL * MIB)
+        return fail("The EFI partition is too small for MyOS's start files.");
+    return 0;
+}
+
+static int check_upgrade(const struct install_plan *p)
+{
+    char live_arch[32] = "", disk_arch[32] = "";
+
+    step("check");
+    say("progress 1");
+    if (find_installed(p))
+        return -1;
+    if (mount_installed(1))
+        return -1;
+    release_key(RELEASE, "ARCH", live_arch, sizeof live_arch);
+    if (!live_arch[0])
+        release_key(RELEASE, "KERNEL_ARCH", live_arch, sizeof live_arch);
+    release_key(NEWROOT RELEASE, "ARCH", disk_arch, sizeof disk_arch);
+    if (!disk_arch[0])
+        release_key(NEWROOT RELEASE, "KERNEL_ARCH", disk_arch, sizeof disk_arch);
+    if (disk_arch[0] && live_arch[0] && strcmp(disk_arch, live_arch)) {
+        unmount_all();
+        return fail("This stick is %s; the disk is %s. Nothing was written.", live_arch, disk_arch);
+    }
+    if (!L.bios && esp_has_microsoft()) {
+        unmount_all();
+        return fail("The EFI partition on %s also holds Windows. This upgrade "
+                    "would overwrite it. Nothing was written.", p->disk);
+    }
+    if (check_upgrade_space()) {
+        unmount_all();
+        return -1;
+    }
+    unmount_all();
+    return 0;
+}
+
+/* The folder an unfinished upgrade saved into, from its marker. */
+static int upgrade_saved(char *out, size_t n)
+{
+    char date[64] = "";
+    FILE *f = fopen(UPGRADE_DIR "/in-progress", "r");
+    if (!f)
+        return -1;
+    if (!fgets(date, sizeof date, f) || !date[0] || strchr(date, '/')) {
+        fclose(f);
+        return -1;
+    }
+    fclose(f);
+    date[strcspn(date, "\n")] = 0;
+    snprintf(out, n, UPGRADE_DIR "/%s", date);
+    return access(out, F_OK);
+}
+
+/* The paths of one action in a diff file, one per line, into list
+   (an rsync --files-from or --exclude-from list, "/"-rooted with lead). */
+static int diff_list(const char *diff, const char *action, const char *list, int lead)
+{
+    FILE *in = fopen(diff, "r"), *out = fopen(list, "w");
+    size_t al = strlen(action);
+    char line[1100];
+    int n = 0;
+
+    if (!in || !out) {
+        if (in)
+            fclose(in);
+        if (out)
+            fclose(out);
+        return -1;
+    }
+    while (fgets(line, sizeof line, in)) {
+        if (strncmp(line, action, al) || line[al] != ' ' || !line[al + 1])
+            continue;
+        fprintf(out, "%s%s", lead ? "/" : "", line + al + 1);
+        n++;
+    }
+    fclose(in);
+    return fclose(out) ? -1 : n;
+}
+
+/* Before anything is replaced, on myos-data: this machine's /etc, release
+   and manifest, the diff, and every system file it changed (the action
+   "changed"), at their paths under replaced/. The marker is written last:
+   an interrupted upgrade, started again, reuses this folder and its diff
+   (made against the disk as it was), never one made from a half-copy. */
+static int step_save(void)
+{
+    char dest[300], tmp[340], date[32];
+    FILE *f;
+    time_t now = time(NULL);
+    struct tm tm;
+
+    step("save");
+    say("progress 4");
+    say("file saving this machine's settings");
+    if (!apply)
+        return 0;
+    if (mount_installed(0))
+        return -1;
+    if (upgrade_saved(dest, sizeof dest) == 0) {
+        logline("an earlier upgrade stopped half-way; going on with %s", dest);
+        return 0;
+    }
+    mkdir(UPGRADE_DIR, 0700);
+    gmtime_r(&now, &tm);
+    strftime(date, sizeof date, "%Y%m%dT%H%M%SZ", &tm);
+    snprintf(dest, sizeof dest, UPGRADE_DIR "/%s", date);
+    if (mkdir(dest, 0700) && errno != EEXIST)
+        return fail("Can't make %s.", dest);
+    {
+        char from_etc[] = NEWROOT "/etc";
+        char *cp[] = { "cp", "-a", from_etc, dest, NULL };
+        if (run(cp))
+            return fail("Can't save /etc to %s.", dest);
+    }
+    {
+        char from_rel[] = NEWROOT RELEASE, from_man[] = NEWROOT "/usr/lib/myos/manifest";
+        char *cp[] = { "cp", "-a", from_rel, from_man, dest, NULL };
+        if (run(cp))
+            logline("this disk has no release or manifest (installed before they existed)");
+    }
+    snprintf(tmp, sizeof tmp, "%s/diff.txt", dest);
+    {
+        char from[] = UPGRADE_DIFF;
+        char *cp[] = { "cp", from, tmp, NULL };
+        if (run(cp))
+            return fail("Can't save the upgrade's file list.");
+    }
+    snprintf(tmp, sizeof tmp, "%s/changed.list", dest);
+    if (diff_list(UPGRADE_DIFF, "changed", tmp, 0) > 0) {
+        char to[320], src[] = NEWROOT "/";
+        snprintf(to, sizeof to, "%s/replaced/", dest);
+        char *rs[] = { "rsync", "-a", "--numeric-ids", "--files-from", tmp, src, to, NULL };
+        if (run(rs))
+            return fail("Can't save the system files this machine changed.");
+    }
+    snprintf(tmp, sizeof tmp, UPGRADE_DIR "/in-progress");
+    f = fopen(tmp, "w");
+    if (!f || fprintf(f, "%s\n", date) < 0 || fclose(f))
+        return fail("Can't write the upgrade marker.");
+    sync();
+    logline("saved settings in %s", dest);
+    say("progress 8");
+    return 0;
+}
+
+static int step_upgrade_copy(void)
+{
+    char saved[300], diff[320], excl[] = "/run/myos-upgrade.exclude";
+    FILE *out, *in;
+    int n;
+
+    step("copy");
+    say("progress 10");
+    say("file copying the system (several minutes)");
+    if (!apply)
+        return 0;
+    if (upgrade_saved(saved, sizeof saved))
+        return fail("The saved settings folder is missing.");
+    snprintf(diff, sizeof diff, "%s/diff.txt", saved);
+    /* Not copied: what install's rsync leaves out too, this machine's logs,
+       the live session's own things that install removes (step_configure:
+       the stick's ssh keys, its sshd link, root's history, its machine id),
+       and every file this machine keeps ("keep", "sidecar", and "deleted":
+       removed here on purpose). rsync deletes nothing it was told to leave
+       out, so this disk's own copies of all of them stay. */
+    out = fopen(excl, "w");
+    if (!out)
+        return fail("Can't write the upgrade's exclude list.");
+    fputs("/proc/*\n/sys/*\n/dev/*\n/run/*\n/tmp/*\n/var/tmp/*\n/var/log/*\n/mnt/*\n"
+          "/media/*\n/home\n/data\n/lost+found\n"
+          "/etc/ssh/ssh_host_*\n/etc/ssh/authorized_keys\n/etc/runit/runsvdir/default/sshd\n"
+          "/etc/machine-id\n/etc/wpa_supplicant/wpa_supplicant.conf\n"
+          "/root/.ash_history\n/root/.bash_history\n", out);
+    in = fopen(diff, "r");
+    if (in) {
+        char line[1100];
+        while (fgets(line, sizeof line, in))
+            if (!strncmp(line, "keep ", 5) || !strncmp(line, "deleted ", 8) ||
+                !strncmp(line, "sidecar ", 8))
+                fprintf(out, "/%s", strchr(line, ' ') + 1);
+        fclose(in);
+    }
+    if (fclose(out) || !in)
+        return fail("Can't write the upgrade's exclude list.");
+    {
+        char *argv[] = {
+            "rsync", "-ax", "--inplace", "--numeric-ids", "--delete-after", "--no-inc-recursive",
+            "--info=progress2", "--exclude-from", excl, "/", NEWROOT "/", NULL
+        };
+        if (run_rsync(argv, 10, 80))
+            return fail("Copying the system failed (rsync; see %s).", PLAN_LOG_DEFAULT);
+    }
+    /* The stick's copies of kept files that changed on both sides, beside
+       them: NAME.myos-new, for the owner to compare. */
+    n = 0;
+    in = fopen(diff, "r");
+    if (in) {
+        char line[1100];
+        while (fgets(line, sizeof line, in)) {
+            if (strncmp(line, "sidecar ", 8))
+                continue;
+            line[strcspn(line, "\n")] = 0;
+            char src[1100], dst[1200];
+            snprintf(src, sizeof src, "/%s", line + 8);
+            snprintf(dst, sizeof dst, NEWROOT "/%s.myos-new", line + 8);
+            char *cp[] = { "cp", "-a", src, dst, NULL };
+            if (run(cp))
+                logline("warning: could not write %s", dst);
+            else
+                n++;
+        }
+        fclose(in);
+    }
+    if (n)
+        logline("%d kept settings files have the stick's new version beside them (.myos-new)", n);
+    unlink(excl);
+    say("progress 82");
+    return 0;
+}
+
+static int person_named(const char *passwd, const char *name)
+{
+    for (const char *l = passwd; *l; ) {
+        const char *e = strchr(l, '\n');
+        size_t len = e ? (size_t)(e - l) + 1 : strlen(l);
+        char n[PLAN_USER];
+        field(l, 0, n, sizeof n);
+        if (!strcmp(n, name) && is_person(l))
+            return 1;
+        l += len;
+    }
+    return 0;
+}
+
+static int append_people(char *dst, size_t cap, const char *src, int skip_myos)
+{
+    for (const char *l = src; *l; ) {
+        const char *e = strchr(l, '\n');
+        size_t len = e ? (size_t)(e - l) + 1 : strlen(l);
+        char name[PLAN_USER];
+        field(l, 0, name, sizeof name);
+        if (is_person(l) && !(skip_myos && !strcmp(name, "myos")) &&
+            cap > strlen(dst) + len + 1)
+            strncat(dst, l, len);
+        l += len;
+    }
+    return 0;
+}
+
+static int step_merge(void)
+{
+    char saved[300], path[320];
+    struct stat pst, gst, sst;
+    char *spass, *sgroup, *sshadow, *npass, *ngroup, *nshadow;
+    char *np = NULL, *ng = NULL, *ns = NULL;
+    size_t cap = 0;
+    int rc = -1;
+
+    step("merge");
+    say("progress 84");
+    say("file putting accounts and settings back");
+    if (!apply)
+        return 0;
+    if (upgrade_saved(saved, sizeof saved))
+        return fail("The saved settings folder is missing.");
+    snprintf(path, sizeof path, "%s/etc/passwd", saved);
+    spass = slurp(path, &pst);
+    snprintf(path, sizeof path, "%s/etc/group", saved);
+    sgroup = slurp(path, &gst);
+    snprintf(path, sizeof path, "%s/etc/shadow", saved);
+    sshadow = slurp(path, &sst);
+    npass = slurp(NEWROOT "/etc/passwd", &pst);
+    ngroup = slurp(NEWROOT "/etc/group", &gst);
+    nshadow = slurp(NEWROOT "/etc/shadow", &sst);
+    if (!spass || !sgroup || !sshadow || !npass || !ngroup || !nshadow)
+        goto out;
+    cap = strlen(spass) + strlen(npass) + strlen(sgroup) + strlen(ngroup) +
+          strlen(sshadow) + strlen(nshadow) + 64;
+    np = calloc(1, cap), ng = calloc(1, cap), ns = calloc(1, cap);
+    if (!np || !ng || !ns)
+        goto out;
+    for (char *l = npass; *l; ) {
+        char *e = strchr(l, '\n');
+        size_t len = e ? (size_t)(e - l) + 1 : strlen(l);
+        if (!is_person(l))
+            strncat(np, l, len);
+        l += len;
+    }
+    append_people(np, cap, spass, 1);
+    /* The stick's system groups, their members the stick's system accounts
+       and this disk's people (wheel above all: doas). */
+    for (char *l = ngroup; *l; ) {
+        char *e = strchr(l, '\n');
+        size_t len = e ? (size_t)(e - l) + 1 : strlen(l);
+        char g[64], pw[64], gid[16], all[512], members[512] = "", out[700];
+        char *save = NULL;
+        field(l, 0, g, sizeof g);
+        field(l, 1, pw, sizeof pw);
+        field(l, 2, gid, sizeof gid);
+        long id = strtol(gid, NULL, 10);
+        l += len;
+        if (id >= 1000 && id < 60000)
+            continue;
+        field(l - len, 3, all, sizeof all);
+        for (char *m = strtok_r(all, ",", &save); m; m = strtok_r(NULL, ",", &save))
+            if (!person_named(npass, m))
+                snprintf(members + strlen(members), sizeof members - strlen(members), "%s%s",
+                         members[0] ? "," : "", m);
+        for (const char *s = sgroup; *s; ) {
+            const char *se = strchr(s, '\n');
+            size_t slen = se ? (size_t)(se - s) + 1 : strlen(s);
+            char sg[64];
+            field(s, 0, sg, sizeof sg);
+            if (!strcmp(sg, g)) {
+                field(s, 3, all, sizeof all);
+                save = NULL;
+                for (char *m = strtok_r(all, ",", &save); m; m = strtok_r(NULL, ",", &save))
+                    if (person_named(spass, m) && strcmp(m, "myos"))
+                        snprintf(members + strlen(members), sizeof members - strlen(members),
+                                 "%s%s", members[0] ? "," : "", m);
+                break;
+            }
+            s += slen;
+        }
+        snprintf(out, sizeof out, "%s:%s:%s:%s\n", g, pw, gid, members);
+        strncat(ng, out, cap - strlen(ng) - 1);
+    }
+    for (char *l = sgroup; *l; ) {
+        char *e = strchr(l, '\n');
+        size_t len = e ? (size_t)(e - l) + 1 : strlen(l);
+        char name[PLAN_USER], gid[16];
+        field(l, 0, name, sizeof name);
+        field(l, 2, gid, sizeof gid);
+        long id = strtol(gid, NULL, 10);
+        if (id >= 1000 && id < 60000 && strcmp(name, "myos"))
+            strncat(ng, l, len);
+        l += len;
+    }
+    for (char *l = nshadow; *l; ) {
+        char *e = strchr(l, '\n');
+        size_t len = e ? (size_t)(e - l) + 1 : strlen(l);
+        char name[PLAN_USER];
+        field(l, 0, name, sizeof name);
+        /* System hashes from the stick; root and people come from the disk. */
+        if (strcmp(name, "root") && !person_named(npass, name))
+            strncat(ns, l, len);
+        l += len;
+    }
+    for (char *l = sshadow; *l; ) {
+        char *e = strchr(l, '\n');
+        size_t len = e ? (size_t)(e - l) + 1 : strlen(l);
+        char name[PLAN_USER];
+        field(l, 0, name, sizeof name);
+        if (!strcmp(name, "root") || (person_named(spass, name) && strcmp(name, "myos")))
+            strncat(ns, l, len);
+        l += len;
+    }
+    if (replace(NEWROOT "/etc/shadow", ns, &sst) || replace(NEWROOT "/etc/group", ng, &gst) ||
+        replace(NEWROOT "/etc/passwd", np, &pst))
+        goto out;
+    {
+        char *rm[] = { "rm", "-rf",
+                       NEWROOT "/usr/share/applications/myos-install.desktop",
+                       NEWROOT "/usr/bin/myos-install",
+                       NEWROOT "/usr/libexec/myos-install-helper",
+                       NEWROOT MKESP,
+                       NULL };
+        run(rm);
+    }
+    rc = 0;
+out:
+    if (ns)
+        explicit_bzero(ns, cap);
+    if (sshadow)
+        explicit_bzero(sshadow, strlen(sshadow));
+    if (nshadow)
+        explicit_bzero(nshadow, strlen(nshadow));
+    free(spass), free(sgroup), free(sshadow), free(npass), free(ngroup), free(nshadow);
+    free(np), free(ng), free(ns);
+    if (rc)
+        return fail("Can't put the accounts back.");
+    say("progress 90");
+    return 0;
+}
+
+/* The start files last: until here the disk still starts its old kernel
+   (with the new system beside it, which the old kernel runs as well as the
+   old one did: the Linux system calls only grow). Install's own step: a new
+   FAT on the EFI partition from the stick's, or the stick's boot area into
+   the BIOS one; neither touches the partition table. */
+static int step_upgrade_boot(const struct install_plan *p)
+{
+    if (L.bios && !L.livedisk[0] && live_boot_area())
+        return -1;
+    return step_boot(p);
+}
+
+static int step_upgrade_finish(const struct install_plan *p)
+{
+    char marker[] = NEWROOT "/data/.myos-upgrade/in-progress";
+    step("finish");
+    say("progress 96");
+    say("file writing everything to the disk");
+    (void)p;
+    if (apply) {
+        unlink(marker);
+        sync();
+        unmount_all();
+    }
+    say("progress 100");
+    return 0;
+}
+
+static int run_upgrade(const struct install_plan *p)
+{
+    if (check_upgrade(p))
+        return 2;
+    if (step_save()) {
+        if (apply)
+            unmount_all();
+        return 3;
+    }
+    if (stop_after && !strcmp(stop_after, "save"))
+        goto stopped;
+    if (step_upgrade_copy()) {
+        if (apply)
+            unmount_all();
+        return 3;
+    }
+    if (stop_after && !strcmp(stop_after, "copy"))
+        goto stopped;
+    if (step_merge() || step_upgrade_boot(p) || step_upgrade_finish(p)) {
+        if (apply)
+            unmount_all();
+        return 3;
+    }
+    step("done");
+    say("ok");
+    logline("ok: MyOS on %s was upgraded", p->disk);
+    return 0;
+stopped:
+    logline("stopped after %s (test)", stop_after);
+    if (apply) {
+        sync();
+        unmount_all();
+    }
+    say("ok");
+    return 0;
+}
+
+static int run_probe(void)
+{
+    struct disk_info disks[DISKS_MAX];
+    int n = disks_scan(disks, DISKS_MAX);
+    char live_arch[32] = "";
+
+    release_key(RELEASE, "ARCH", live_arch, sizeof live_arch);
+    if (!live_arch[0])
+        release_key(RELEASE, "KERNEL_ARCH", live_arch, sizeof live_arch);
+    for (int i = 0; i < n; i++) {
+        struct install_plan p;
+        const struct disk_info *d = &disks[i];
+        char sys[64] = "", kern[64] = "", arch[32] = "";
+        const char *why = NULL;
+        int ok = 0, has_root = 0, has_data = 0;
+
+        for (int k = 0; k < d->npart; k++) {
+            has_root |= !strcmp(d->parts[k].label, "myos-root");
+            has_data |= !strcmp(d->parts[k].label, "myos-data");
+        }
+        plan_init(&p);
+        snprintf(p.disk, sizeof p.disk, "%s", d->path);
+        p.firmware = disks_firmware_uefi() ? FW_UEFI : FW_BIOS;
+        if (d->running) {
+            why = "MyOS is running from this disk";
+        } else if (!has_root || !has_data) {
+            why = "no myos-root and myos-data";
+        } else if (find_installed(&p)) {
+            why = d->why_not[0] ? d->why_not : "no myos-root and myos-data";
+        } else if (mount_installed(1)) {
+            why = "can't read myos-root";
+            unmount_all();
+        } else {
+            release_key(NEWROOT RELEASE, "SYSTEM_VERSION", sys, sizeof sys);
+            release_key(NEWROOT RELEASE, "KERNEL_VERSION", kern, sizeof kern);
+            release_key(NEWROOT RELEASE, "ARCH", arch, sizeof arch);
+            if (!arch[0])
+                release_key(NEWROOT RELEASE, "KERNEL_ARCH", arch, sizeof arch);
+            if (arch[0] && live_arch[0] && strcmp(arch, live_arch))
+                why = "another architecture";
+            else if (!L.bios && esp_has_microsoft())
+                why = "Windows is on the EFI partition";
+            else
+                ok = 1;
+            unmount_all();
+        }
+        printf("%s %s %s %s %s\n", d->path, ok ? "upgradable" : "no",
+               sys[0] ? sys : "-", kern[0] ? kern : "-", why ? why : "-");
+    }
+    return 0;
+}
+
 static int run_plan(const struct install_plan *p)
 {
+    if (p->mode == MODE_UPGRADE)
+        return run_upgrade(p);
     if (check_layout(p))
         return 2;
     if (step_partition(p) || step_filesystems(p) || step_boot(p) || step_copy(p) ||
@@ -1181,7 +1937,8 @@ static int run_plan(const struct install_plan *p)
 
 static void usage(void)
 {
-    fprintf(stderr, "usage: myos-install-helper --check|--dry-run|--apply PLAN\n");
+    fprintf(stderr, "usage: myos-install-helper --check|--dry-run|--apply PLAN [--stop-after STEP]\n"
+                    "       myos-install-helper --probe\n");
 }
 
 int main(int argc, char **argv)
@@ -1191,13 +1948,20 @@ int main(int argc, char **argv)
     uid_t caller = getuid();
     int rc;
 
-    if (argc != 3) {
+    if (argc < 2) {
         usage();
         return 1;
     }
     mode = argv[1];
-    path = argv[2];
-    if (strcmp(mode, "--check") && strcmp(mode, "--dry-run") && strcmp(mode, "--apply")) {
+    path = argc >= 3 ? argv[2] : NULL;
+    if (argc >= 5 && !strcmp(argv[3], "--stop-after"))
+        stop_after = argv[4];
+    if (strcmp(mode, "--check") && strcmp(mode, "--dry-run") && strcmp(mode, "--apply") &&
+        strcmp(mode, "--probe")) {
+        usage();
+        return 1;
+    }
+    if (strcmp(mode, "--probe") && argc < 3) {
         usage();
         return 1;
     }
@@ -1220,6 +1984,9 @@ int main(int argc, char **argv)
         return 1;
     }
     open_log();
+
+    if (!strcmp(mode, "--probe"))
+        return run_probe();
 
     if (open_plan(path, caller, &p, 1))
         return 2;

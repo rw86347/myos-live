@@ -4,6 +4,7 @@
 
 #include <ctype.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -117,6 +118,7 @@ void disks_suggest_hostname(char *out, size_t n, const char *user)
 int disks_wifi_ssid(char *out, size_t n)
 {
     static const char *const files[] = {
+        STICK_WIFI,
         "/etc/wpa_supplicant/wpa_supplicant.conf",
         "/etc/wpa_supplicant.conf",
         NULL
@@ -215,6 +217,25 @@ static int mounted_devs(char devs[][64], int *is_root, int max)
     return n;
 }
 
+/* The ext2 volume name (superblock offset 120). MBR partitions have no
+   GPT name; the installer labelled them myos-root / myos-data. */
+static int ext2_label(const char *dev, char *out, size_t n)
+{
+    unsigned char sb[136];
+    int fd = open(dev, O_RDONLY | O_CLOEXEC);
+    int ok = fd >= 0 && pread(fd, sb, sizeof sb, 1024) == (ssize_t)sizeof sb;
+    if (fd >= 0)
+        close(fd);
+    if (!ok || sb[56] != 0x53 || sb[57] != 0xEF)
+        return -1;
+    memcpy(out, sb + 120, n < 16 ? n - 1 : 16);
+    out[n < 16 ? n - 1 : 16] = 0;
+    for (size_t i = 0; i < n && out[i]; i++)
+        if (out[i] < 32 || out[i] == 127)
+            out[i] = 0;
+    return out[0] ? 0 : -1;
+}
+
 static void parse_uevent(const char *path, char *partname, size_t n)
 {
     FILE *f = fopen(path, "r");
@@ -267,6 +288,11 @@ static int collect_parts(struct disk_info *d)
         p->start = start;
         snprintf(file, sizeof file, "%s/uevent", pdir);
         parse_uevent(file, p->label, sizeof p->label);
+        if (!p->label[0]) {
+            char dev[64];
+            snprintf(dev, sizeof dev, "/dev/%s", p->name);
+            ext2_label(dev, p->label, sizeof p->label);
+        }
         if (p->bytes >= 80ULL * 1024 * 1024 && p->bytes <= 1024ULL * 1024 * 1024 &&
             (strcasestr(p->label, "efi") || strcasestr(p->label, "ESP") || p->start <= 2048 * 4))
             p->is_esp = 1;
@@ -350,6 +376,15 @@ int disks_scan(struct disk_info *out, int max)
         }
         d->has_system = esp && large;
         d->has_windows = d->has_system && win_named;
+        {
+            int has_root = 0, has_data = 0;
+            for (int i = 0; i < d->npart; i++) {
+                has_root |= !strcmp(d->parts[i].label, "myos-root");
+                has_data |= !strcmp(d->parts[i].label, "myos-data");
+            }
+            if (has_root && has_data && !d->running)
+                snprintf(d->why_not, sizeof d->why_not, "MyOS is already on this disk");
+        }
         if (d->in_use && (d->running || nmounted < 0))
             snprintf(d->summary, sizeof d->summary, "MyOS is running from this disk");
         else if (d->in_use)             /* mounted: by hand, or a try that couldn't unmount */

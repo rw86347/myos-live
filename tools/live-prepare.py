@@ -119,6 +119,10 @@ def main():
             fail("%s is still in the image" % path)
     if "ssh_host_" in debugfs(o.debugfs, dev, ["ls /etc/ssh"]):
         fail("SSH host keys are in the image")
+    if not exists(o.debugfs, dev, "/usr/lib/myos/manifest"):
+        fail("the first boot did not write /usr/lib/myos/manifest")
+    if not exists(o.debugfs, dev, "/usr/lib/myos/release"):
+        fail("the image has no /usr/lib/myos/release")
     r = subprocess.run([o.e2fsck, "-fn", dev], capture_output=True, text=True)
     if r.returncode != 0:
         fail("e2fsck found damage:\n" + r.stdout[-800:])

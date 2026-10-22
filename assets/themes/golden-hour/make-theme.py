@@ -11,6 +11,7 @@ Writes, next to this file:
                               the Start button (shape C, full taskbar height)
   mockup.svg / mockup.png     a 1024x768 desktop built from the pieces
   mockup@2x.png               the same at 2048x1536
+  battery-popup.svg / .png    the tray battery pop-up, above the bottom tray
   icon-sheet.svg / .png       every icon with its name
   ui-states.svg / .png        every element (taskbar, title bars, buttons...) in every state
   settings.svg / .png         Settings: Users (create account, admin password)
@@ -813,6 +814,91 @@ def mockup():
     return "".join(o)
 
 
+def battery_card(x, top, percent, time_s, status, health, health_word, cycles, profile=1):
+    """The cream card: big percent, time, plugged-in or on-battery, health, slider."""
+    w, h, r = 340, 268, 18
+    y = top
+    o = ['<g filter="url(#shadow-active)">',
+         '<rect x="%s" y="%s" width="%s" height="%s" rx="%s" fill="%s" stroke="%s"/>'
+         % (x, y, w, h, r, C["panel_white"], C["border"]),
+         "</g>",
+         text(x + 22, y + 72, "%d" % percent, 56, C["text"], font=FONT_TITLE),
+         text(x + 108, y + 46, "%", 20, C["text"]),
+         text(x + 108, y + 72, time_s, 15, C["text_soft"]),
+         text(x + 22, y + 102, status, 14, C["text_soft"]),
+         '<rect x="%s" y="%s" width="88" height="8" rx="4" fill="%s"/>' % (x + 22, y + 128, C["paper_2"]),
+         '<rect x="%s" y="%s" width="%s" height="8" rx="4" fill="%s"/>'
+         % (x + 22, y + 128, max(8, 88 * health / 100), C["green_4"]),
+         text(x + 122, y + 136, "Health  %s  %d%%" % (health_word, health), 13),
+         text(x + 22, y + 160, "%d cycles" % cycles, 12, C["text_soft"]),
+         '<path d="M%s %sh%s" stroke="%s"/>' % (x + 22, y + 180, w - 44, C["border"])]
+    track_y, track_w = y + 208, w - 56
+    o.append('<rect x="%s" y="%s" width="%s" height="6" rx="3" fill="%s"/>' % (x + 28, track_y, track_w, C["paper_2"]))
+    o.append('<rect x="%s" y="%s" width="%s" height="6" rx="3" fill="%s"/>'
+             % (x + 28, track_y, track_w * profile / 2, C["slate_2"]))
+    knob_x = x + 28 + track_w * profile / 2
+    o.append('<circle cx="%s" cy="%s" r="9" fill="#ffffff" stroke="%s" stroke-width="1.5"/>'
+             % (knob_x, track_y + 3, C["slate_rim"]))
+    for label, frac, anchor in (("Lifespan", 0, "start"), ("Balanced", 0.5, "middle"), ("Speed", 1, "end")):
+        o.append(text(x + 28 + track_w * frac, y + 242, label, 11, C["text_soft"], anchor=anchor))
+    return "".join(o)
+
+
+def battery_popup():
+    """The pop-up above the tray battery: plugged in, time to full. Tray on the bottom."""
+    o = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d"><defs>%s</defs>'
+         % (W, H, W, H, COMMON_DEFS)]
+    o.append('<image href="wallpaper.jpg" width="%d" height="%d" preserveAspectRatio="xMidYMid slice"/>' % (W, H))
+    for k, (name, label) in enumerate([("my-files", "My Files"), ("disks", "Disks"), ("terminal", "Terminal")]):
+        y = 18 + k * 82
+        o.append(img(name, 26, y, 48))
+        o.append(text(50, y + 64, label, 12, "#ffffff", anchor="middle", extra='filter="url(#labelshadow)"'))
+    o.append(curl(S("Hot corner", "normal"), W, 0))
+
+    o.append(draw_bar(S("Taskbar", "normal"), 0, H - BAR_H, W, BAR_H))
+    for k, (name, label, state) in enumerate([("folder", "My Files", "normal"), ("terminal", "Terminal", "normal")]):
+        x = 176 + k * 170
+        st = S("Task button", state)
+        o.append(draw_bar(st, x, H - BAR_H + 5, 160, 30))
+        o.append(img(name, x + 8, H - BAR_H + 11, 18))
+        o.append(text(x + 32, H - BAR_H + 25, label, 12, st["text"]))
+    trx = W - 190
+    o.append(draw_bar(S("Tray", "normal"), trx, H - BAR_H, 190, BAR_H))
+    o.append(img("tray-network", trx + 10, H - BAR_H + 11, 18))
+    o.append(img("tray-volume", trx + 38, H - BAR_H + 11, 18))
+    # The tray battery, charging: green fill and a bolt. 36 px so it matches the
+    # doubled tray icons on the live disk (make-live-theme.py TRAY_ICON).
+    bx, by, bs = trx + 68, H - BAR_H + 2, 36
+    o.append('<g transform="translate(%s,%s) scale(%s)">' % (bx, by, bs / 48))
+    o.append('<rect x="3" y="13" width="36" height="22" rx="4" fill="%s" stroke="#ffffff" stroke-width="3"/>'
+             % C["green_3"])
+    o.append('<rect x="40" y="19" width="5" height="10" rx="1.5" fill="#ffffff"/>')
+    o.append('<path d="M25 6 L12 27 H21 L17 42 L32 20 H23 L28 6 Z" fill="#ffffff" '
+             'stroke="#163447" stroke-width="2.2" stroke-linejoin="round"/>')
+    o.append("</g>")
+    o.append(text(trx + 152, H - BAR_H + 25, "8:11 PM", 12, "#ffffff", anchor="middle"))
+    o.append('<g transform="translate(0,%d) scale(%s)">%s</g>' % (H - BAR_H, BAR_H / START_H, start_button("normal")))
+
+    bat_cx = bx + bs / 2
+    card_w, card_h, gap = 340, 268, 10
+    card_top = H - BAR_H - gap - 12 - card_h
+    card_x = bat_cx - card_w / 2
+    if card_x + card_w > W - 12:
+        card_x = W - 12 - card_w
+    if card_x < 12:
+        card_x = 12
+    # Caret on the bottom of the card, aimed at the tray battery.
+    caret = 10
+    o.append(battery_card(card_x, card_top, 78, "1 hr 20 min to full",
+                          "Plugged in · charging", 92, "Good", 412, profile=1))
+    o.append('<path d="M%s %s l10 %s l10 -%s z" fill="%s" stroke="%s"/>'
+             % (bat_cx - 10, card_top + card_h - 1, caret, caret, C["panel_white"], C["border"]))
+    o.append('<path d="M%s %s h20" stroke="%s" stroke-width="2"/>'
+             % (bat_cx - 10, card_top + card_h, C["panel_white"]))
+    o.append("</svg>\n")
+    return "".join(o)
+
+
 # --- the login screen ------------------------------------------------------------------
 def user_picture(kind, x, y, size, opacity=1, tag=None):
     """rodger's picture is a piece of the wallpaper; guest gets a plain silhouette."""
@@ -1201,6 +1287,7 @@ def main():
               % (START_W, START_H, START_W, START_H, COMMON_DEFS, start_button(state)), zoom=2)
     write("mockup", mockup())
     render("mockup.svg", "mockup@2x.png", zoom=2)
+    write("battery-popup", battery_popup())
     write("login", login())
     render("login.svg", "login@2x.png", zoom=2)
     write("settings", settings("users"))
@@ -1212,7 +1299,8 @@ def main():
     write("icon-sheet", sheet())
     write("ui-states", states_sheet())
     update_doc()
-    print("%d icons, start button (3 states), mockup, icon sheet, states sheet, doc tables" % len(ICONS))
+    print("%d icons, start button (3 states), mockup, battery pop-up, icon sheet, states sheet, doc tables"
+          % len(ICONS))
 
 
 if __name__ == "__main__":

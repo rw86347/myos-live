@@ -18,6 +18,20 @@ mkdir -p /proc /sys /run                # a mount needs its mount point to exist
 mountpoint -q /proc || mount -t proc -o nosuid,noexec,nodev proc /proc 2>/dev/null
 mountpoint -q /sys  || mount -t sysfs -o nosuid,noexec,nodev sys /sys 2>/dev/null
 mountpoint -q /run  || mount -t tmpfs -o mode=0755,nosuid,nodev run /run 2>/dev/null
+# The power-saving slider in the tray (myos-battery) writes the platform
+# profile; the administrators (wheel) may, as they may with doas anyway.
+# The kernel takes only its three words, so this hands out nothing more.
+p=/sys/firmware/acpi/platform_profile
+[ -e $p ] && chgrp wheel $p && chmod 664 $p
+# The panel's brightness: everyone's (group video), as the screen is, so the
+# session's dimming (myos-idle) works for every account.
+for p in /sys/class/backlight/*/brightness; do
+    [ -e "$p" ] && chgrp video "$p" && chmod 664 "$p"
+done
+# Two-finger scrolling on a touchpad, on or off (Settings > Mouse &
+# Keyboard): every account is in group input, as each has its own setting.
+p=/sys/module/hid/parameters/two_finger_scroll
+[ -e $p ] && chgrp input $p && chmod 664 $p
 # POSIX shared memory (shm_open): Firefox, GTK and Mesa look here.
 # System V shm (shmget) is a different thing, in the kernel.
 mkdir -p /dev/shm
@@ -63,12 +77,22 @@ done
 if [ -e /etc/myos/first-boot.build ]; then
     rm -f /etc/machine-id /etc/ssh/ssh_host_* /var/log/boot.log /var/log/boot.log.old
     rm -f /etc/myos/first-boot.build
+    # The upgrade's file list (docs/INSTALLER-PLAN.md), of the image as it
+    # ships: after the first boot's files, without what was just removed.
+    /usr/libexec/myos-manifest write || echo "MyOS: myos-manifest write failed"
     echo "MyOS: the first boot's work is done; this image is ready to ship."
     exit 100
 fi
+# A stick that never ran live-prepare writes it at its own first start.
+[ -e /usr/lib/myos/manifest ] || /usr/libexec/myos-manifest write 2>/dev/null
 # This machine's own D-Bus id (/etc/machine-id), once: every image ships
 # without one, so no two machines share it.
 [ -s /etc/machine-id ] || dbus-uuidgen --ensure=/etc/machine-id 2>/dev/null
+# The live stick's homes and Wi-Fi networks, on its myos-data partition so a
+# new build written onto the stick keeps them. Before any service or login.
+/etc/myos/stick-data.sh || echo "MyOS: stick-data.sh failed: home stays on the system partition"
 
 hostname -F /etc/hostname 2>/dev/null
+# This stage's output goes to the serial port (/sbin/init). The kernel's
+# step list stays on the screen (agetty is started --noclear).
 echo "MyOS is up." > /dev/tty1         # the screen (the console is the serial port)

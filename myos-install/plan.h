@@ -35,7 +35,8 @@
 enum install_mode {
     MODE_FREE = 0,              /* only unpartitioned space; keep what exists */
     MODE_ERASE,                 /* the whole disk becomes MyOS */
-    MODE_CUSTOM                 /* sizes chosen on the partitions page */
+    MODE_CUSTOM,                /* sizes chosen on the partitions page */
+    MODE_UPGRADE                /* replace the system; keep files and accounts */
 };
 
 enum install_firmware {

@@ -36,6 +36,10 @@ struct disk_info {
     int has_system;             /* an EFI partition and a large one: keep the ESP */
     int has_windows;            /* ...and Windows' own partition names */
     int npart;
+    int upgradable;             /* myos-root + myos-data, same arch, our EFI */
+    char system_ver[64];
+    char kernel_ver[64];
+    char why_not[160];          /* why it cannot be upgraded, if not */
     struct disk_part parts[DISK_PARTS];
 };
 
@@ -43,6 +47,8 @@ int disks_scan(struct disk_info *out, int max);
 int disks_firmware_uefi(void);
 void disks_format_bytes(unsigned long long n, char *out, size_t len);
 void disks_suggest_hostname(char *out, size_t n, const char *user);
+/* The live stick's Wi-Fi networks, on its myos-data (/etc/myos/stick-data.sh). */
+#define STICK_WIFI "/data/stick/wpa_supplicant.conf"
 int disks_wifi_ssid(char *out, size_t n);
 const struct disk_info *disks_find(const struct disk_info *list, int n, const char *path);
 void disks_part_path(const char *disk, int partno, char *out, size_t n);

@@ -30,7 +30,8 @@ void plan_init(struct install_plan *p)
 
 const char *plan_mode_name(int mode)
 {
-    return mode == MODE_ERASE ? "erase" : mode == MODE_CUSTOM ? "custom" : "free";
+    return mode == MODE_ERASE ? "erase" : mode == MODE_CUSTOM ? "custom"
+         : mode == MODE_UPGRADE ? "upgrade" : "free";
 }
 
 const char *plan_firmware_name(int firmware)
@@ -137,6 +138,8 @@ static int mode_from(const char *s)
         return MODE_ERASE;
     if (!strcmp(s, "custom"))
         return MODE_CUSTOM;
+    if (!strcmp(s, "upgrade"))
+        return MODE_UPGRADE;
     return MODE_FREE;
 }
 
@@ -303,6 +306,13 @@ static int good_word(const char *s)
 
 int plan_check(const struct install_plan *p, char *err, size_t errlen)
 {
+    if (p->mode == MODE_UPGRADE) {
+        if (!p->disk[0] || strncmp(p->disk, "/dev/", 5)) {
+            snprintf(err, errlen, "Pick a disk to upgrade.");
+            return -1;
+        }
+        return 0;
+    }
     if (!p->lang[0] || !p->keyboard[0] || !p->timezone[0]) {
         snprintf(err, errlen, "Language, keyboard and time zone are required.");
         return -1;
@@ -360,6 +370,21 @@ static void bytes_gb(unsigned long long n, char *out, size_t len)
 void plan_describe(const struct install_plan *p, char *out, size_t n)
 {
     char disk_sz[32], data_sz[32];
+
+    if (p->mode == MODE_UPGRADE) {
+        char sz[32];
+        bytes_gb(p->disk_bytes, sz, sizeof sz);
+        snprintf(out, n,
+                 "Upgrade\tMyOS on %s%s%s%s\n"
+                 "Kept\tfiles on myos-data, accounts, language, keyboard, "
+                 "time zone, Wi-Fi, kernel settings\n"
+                 "Replaced\tthe system on myos-root and the boot files\n"
+                 "Not touched\tpartition table, myos-data, myos-config\n",
+                 p->disk_name[0] ? p->disk_name : p->disk,
+                 p->disk_bytes ? " (" : "", p->disk_bytes ? sz : "",
+                 p->disk_bytes ? ")" : "");
+        return;
+    }
     unsigned long long pool = p->mode == MODE_ERASE ? p->disk_bytes : p->free_bytes;
     unsigned long long reserved = (p->firmware == FW_UEFI ? ESP_MIB : BOOT_AREA_MIB) * 1024ULL * 1024;
     unsigned long long root = (unsigned long long)p->root_gb * 1000ULL * 1000 * 1000;

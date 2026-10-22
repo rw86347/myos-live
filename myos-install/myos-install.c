@@ -105,6 +105,19 @@ static const char *WORK_KEY[] = {
     "partition", "filesystems", "boot", "copy", "configure", "finish"
 };
 
+static const char *UPGRADE_WORK[] = {
+    "Checking the installed MyOS",
+    "Saving this computer's settings",
+    "Copying the new system",
+    "Putting accounts back",
+    "Making the disk start the new MyOS",
+    "Cleaning up"
+};
+
+static const char *UPGRADE_KEY[] = {
+    "check", "save", "copy", "merge", "boot", "finish"
+};
+
 /* --- time zones ----------------------------------------------------------- */
 
 /* A whole small file, NUL-terminated; NULL if it can't be read. */
@@ -277,6 +290,64 @@ static const char *helper_path(void)
     return "/usr/libexec/myos-install-helper";
 }
 
+/* Fill each disk's upgradable flag from the helper (root: it mounts
+   myos-root read-only to read /usr/lib/myos/release). */
+static void apply_probe(struct disk_info *disks, int n)
+{
+    char cmd[256], line[512];
+    FILE *f;
+
+    snprintf(cmd, sizeof cmd, "%s --probe", helper_path());
+    f = popen(cmd, "r");
+    if (!f)
+        return;
+    while (fgets(line, sizeof line, f)) {
+        char path[64], status[32], sys[64], kern[64], why[160];
+        struct disk_info *d;
+        path[0] = status[0] = sys[0] = kern[0] = why[0] = 0;
+        if (sscanf(line, "%63s %31s %63s %63s %159[^\n]", path, status, sys, kern, why) < 2)
+            continue;
+        d = (struct disk_info *)disks_find(disks, n, path);
+        if (!d)
+            continue;
+        d->upgradable = !strcmp(status, "upgradable");
+        snprintf(d->system_ver, sizeof d->system_ver, "%s", strcmp(sys, "-") ? sys : "");
+        snprintf(d->kernel_ver, sizeof d->kernel_ver, "%s", strcmp(kern, "-") ? kern : "");
+        snprintf(d->why_not, sizeof d->why_not, "%s", why);
+        if (d->upgradable && !d->in_use) {
+            char sum[80];
+            snprintf(sum, sizeof sum, "MyOS %s", d->system_ver[0] ? d->system_ver : "is installed");
+            snprintf(d->summary, sizeof d->summary, "%s", sum);
+        }
+    }
+    pclose(f);
+}
+
+static int first_upgradable(const struct disk_info *disks, int n)
+{
+    for (int i = 0; i < n; i++)
+        if (disks[i].upgradable)
+            return i;
+    return -1;
+}
+
+static void live_release(char *sys, size_t ns, char *kern, size_t nk)
+{
+    FILE *f = fopen("/usr/lib/myos/release", "r");
+    char line[128];
+    sys[0] = kern[0] = 0;
+    if (!f)
+        return;
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\n")] = 0;
+        if (!strncmp(line, "SYSTEM_VERSION=", 15))
+            snprintf(sys, ns, "%s", line + 15);
+        else if (!strncmp(line, "KERNEL_VERSION=", 15))
+            snprintf(kern, nk, "%s", line + 15);
+    }
+    fclose(f);
+}
+
 static void apply_layout(const char *kb)
 {
     char layout[32], *var, *argv[6];
@@ -358,6 +429,68 @@ static int text_install(struct install_plan *p, const char *plan_path)
 
     printf("Install MyOS  (nothing is written until the last question)\n\n");
 
+    ndisk = disks_scan(disks, DISKS_MAX);
+    apply_probe(disks, ndisk);
+    {
+        int u = first_upgradable(disks, ndisk);
+        char live_sys[64], live_kern[64];
+        live_release(live_sys, sizeof live_sys, live_kern, sizeof live_kern);
+        if (u >= 0) {
+            printf("MyOS is already on %s.\n", disks[u].name);
+            printf("  system %s -> %s\n", disks[u].system_ver[0] ? disks[u].system_ver : "unknown",
+                   live_sys[0] ? live_sys : "this stick");
+            printf("  kernel %s -> %s\n", disks[u].kernel_ver[0] ? disks[u].kernel_ver : "unknown",
+                   live_kern[0] ? live_kern : "this stick");
+            if (live_sys[0] && disks[u].system_ver[0] && strcmp(live_sys, disks[u].system_ver) < 0)
+                printf("  (this stick is older than the disk)\n");
+            printf("\n  1) Upgrade MyOS on this disk\n  2) Install from the start\n");
+            if (pick("Number", 2, 0) == 0) {
+                p->mode = MODE_UPGRADE;
+                strcpy(p->disk, disks[u].path);
+                strcpy(p->disk_name, disks[u].name);
+                p->disk_bytes = disks[u].bytes;
+                p->firmware = disks_firmware_uefi() ? FW_UEFI : FW_BIOS;
+                disks_wifi_ssid(p->wifi_ssid, sizeof p->wifi_ssid);
+                if (p->wifi_ssid[0]) {
+                    printf("Copy the Wi-Fi network \"%s\"? [Y/n] ", p->wifi_ssid);
+                    fflush(stdout);
+                    if (fgets(buf, sizeof buf, stdin) && (buf[0] == 'n' || buf[0] == 'N'))
+                        p->copy_wifi = 0;
+                    else
+                        p->copy_wifi = 1;
+                }
+                if (plan_check(p, err, sizeof err)) {
+                    fprintf(stderr, "%s\n", err);
+                    return 1;
+                }
+                plan_describe(p, buf, sizeof buf);
+                printf("\n--- summary (nothing written yet) ---\n%s\n", buf);
+                if (read_line("Upgrade now? This writes the disk. [y/N] ", buf, sizeof buf, 0))
+                    return 1;
+                apply = buf[0] == 'y' || buf[0] == 'Y';
+                if (plan_write(plan_path, p)) {
+                    fprintf(stderr, "Can't write %s\n", plan_path);
+                    return 1;
+                }
+                if (!apply) {
+                    printf("Stopped before writing. Run: %s --apply %s\n", helper_path(), plan_path);
+                    return 0;
+                }
+                {
+                    pid_t pid = fork();
+                    int st;
+                    if (pid == 0) {
+                        execl(helper_path(), "myos-install-helper", "--apply", plan_path, (char *)NULL);
+                        perror("myos-install-helper");
+                        _exit(127);
+                    }
+                    waitpid(pid, &st, 0);
+                    return (WIFEXITED(st) && WEXITSTATUS(st) == 0) ? 0 : 1;
+                }
+            }
+        }
+    }
+
     printf("Language:\n");
     for (i = 0; i < (int)(sizeof LANGS / sizeof *LANGS); i++)
         printf("  %d) %s  (%s)\n", i + 1, LANGS[i].native, LANGS[i].english);
@@ -407,7 +540,6 @@ static int text_install(struct install_plan *p, const char *plan_path)
     if (read_line("This PC also runs Windows (hardware clock in local time)? [y/N] ", buf, sizeof buf, 0) == 0)
         p->hwclock_local = buf[0] == 'y' || buf[0] == 'Y';
 
-    ndisk = disks_scan(disks, DISKS_MAX);
     printf("\nDisks:\n");
     if (!ndisk)
         printf("  (none in /sys/block — the kernel has not listed any disks yet)\n");
@@ -440,17 +572,52 @@ static int text_install(struct install_plan *p, const char *plan_path)
     } else if (read_line("Device path (for a later run, e.g. /dev/sda): ", buf, sizeof buf, 0) == 0)
         snprintf(p->disk, sizeof p->disk, "%s", buf);
 
-    printf("\nHow to use the disk:\n  1) free space (keep what is there)\n  2) erase the disk\n  3) custom sizes\n");
+    printf("\nHow to use the disk:\n  1) free space (keep what is there)\n  2) erase the disk\n  3) custom sizes%s\n",
+           (ndisk && disks_find(disks, ndisk, p->disk) &&
+            disks_find(disks, ndisk, p->disk)->upgradable) ? "\n  4) upgrade MyOS on this disk" : "");
     for (;;) {
-        i = pick("Number", 3, 0);
-        p->mode = i == 1 ? MODE_ERASE : i == 2 ? MODE_CUSTOM : MODE_FREE;
+        int max = (ndisk && disks_find(disks, ndisk, p->disk) &&
+                   disks_find(disks, ndisk, p->disk)->upgradable) ? 4 : 3;
+        i = pick("Number", max, 0);
+        p->mode = i == 1 ? MODE_ERASE : i == 2 ? MODE_CUSTOM : i == 3 ? MODE_UPGRADE : MODE_FREE;
         const struct disk_info *dk = ndisk ? disks_find(disks, ndisk, p->disk) : NULL;
-        const char *why = p->mode != MODE_ERASE && dk
+        const char *why = p->mode != MODE_ERASE && p->mode != MODE_UPGRADE && dk
             ? disks_free_problem(dk, (unsigned long long)MIN_INSTALL_GB * 1000000000ULL) : NULL;
         p->keep_esp = dk && p->mode != MODE_ERASE && disks_has_esp(dk);
         if (!why)
             break;
         printf("%s\n", why);
+    }
+    if (p->mode == MODE_UPGRADE) {
+        p->firmware = disks_firmware_uefi() ? FW_UEFI : FW_BIOS;
+        if (plan_check(p, err, sizeof err)) {
+            fprintf(stderr, "%s\n", err);
+            return 1;
+        }
+        plan_describe(p, buf, sizeof buf);
+        printf("\n--- summary (nothing written yet) ---\n%s\n", buf);
+        if (read_line("Upgrade now? This writes the disk. [y/N] ", buf, sizeof buf, 0))
+            return 1;
+        apply = buf[0] == 'y' || buf[0] == 'Y';
+        if (plan_write(plan_path, p)) {
+            fprintf(stderr, "Can't write %s\n", plan_path);
+            return 1;
+        }
+        if (!apply) {
+            printf("Stopped before writing. Run: %s --apply %s\n", helper_path(), plan_path);
+            return 0;
+        }
+        {
+            pid_t pid = fork();
+            int st;
+            if (pid == 0) {
+                execl(helper_path(), "myos-install-helper", "--apply", plan_path, (char *)NULL);
+                perror("myos-install-helper");
+                _exit(127);
+            }
+            waitpid(pid, &st, 0);
+            return (WIFEXITED(st) && WEXITSTATUS(st) == 0) ? 0 : 1;
+        }
     }
     if (read_line("System size in GB [32]: ", buf, sizeof buf, 0) == 0 && atoi(buf) >= MIN_INSTALL_GB)
         p->root_gb = atoi(buf);
@@ -549,7 +716,8 @@ static struct {
     GtkWidget *step_lab[9];
     GtkWidget *lang_list, *kb_list, *try_kb, *detected;
     GtkWidget *map, *tz_search, *region, *city, *now, *ntp, *winclk;
-    GtkWidget *disk_list, *disk_bar, *mode_free, *mode_erase, *mode_custom, *free_note;
+    GtkWidget *disk_list, *disk_bar, *mode_free, *mode_erase, *mode_custom, *mode_upgrade, *free_note;
+    GtkWidget *ask_lab;
     GtkWidget *before_bar, *after_bar, *part_view, *root_spin, *home;
     GtkWidget *pt_icon, *pt_title, *pt_add, *pt_resize, *pt_delete, *pt_format, *pt_useall;
     GtkListStore *part_store;
@@ -560,7 +728,7 @@ static struct {
     GtkWidget *done_body, *save_log;
     struct install_plan plan;
     struct disk_info disks[DISKS_MAX];
-    int ndisk, disk_sel, lang_sel, kb_sel, tz_sel, page;
+    int ndisk, disk_sel, lang_sel, kb_sel, tz_sel, page, from_ask;
     int user_set_user, user_set_host;
     char plan_path[256];
     GPid helper_pid;
@@ -1025,7 +1193,9 @@ static void gather(void)
         p->disk_bytes = d->bytes;
         p->free_bytes = d->free_bytes;
     }
-    if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui.mode_erase)))
+    if (ui.mode_upgrade && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui.mode_upgrade)))
+        p->mode = MODE_UPGRADE;
+    else if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui.mode_erase)))
         p->mode = MODE_ERASE;
     else if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui.mode_custom)))
         p->mode = MODE_CUSTOM;
@@ -1278,6 +1448,12 @@ static void disk_picked(GtkListBox *box, GtkListBoxRow *row, gpointer unused)
     ui.disk_sel = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "idx"));
     show_check();
     gather();
+    if (ui.mode_upgrade) {
+        const struct disk_info *d = cur_disk();
+        gtk_widget_set_sensitive(ui.mode_upgrade, d && d->upgradable);
+        if (d && !d->upgradable && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ui.mode_upgrade)))
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ui.mode_erase), TRUE);
+    }
     refresh_parts();
 }
 
@@ -1664,6 +1840,15 @@ static GtkWidget *build_pages(void)
     ui.stack = gtk_stack_new();
     gtk_stack_set_transition_type(GTK_STACK(ui.stack), GTK_STACK_TRANSITION_TYPE_NONE);
 
+    /* ask: shown first when a disk can be upgraded */
+    page = page_box("MyOS is already on this computer",
+                    "Upgrade keeps your files, accounts and settings. "
+                    "Install from the start asks the usual questions and can erase a disk.",
+                    &body);
+    ui.ask_lab = label_new("", NULL, 0);
+    gtk_box_pack_start(GTK_BOX(body), ui.ask_lab, FALSE, FALSE, 0);
+    gtk_stack_add_named(GTK_STACK(ui.stack), page, "ask");
+
     /* 0 language */
     page = page_box("Welcome", "Choose the language for the installer and for MyOS.", &body);
     scroll = gtk_scrolled_window_new(NULL, NULL);
@@ -1757,9 +1942,12 @@ static GtkWidget *build_pages(void)
                                                                "Erase this disk and install MyOS");
     ui.mode_custom = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(ui.mode_free),
                                                                 "Something else");
+    ui.mode_upgrade = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(ui.mode_free),
+                                                                 "Upgrade MyOS on this disk");
     gtk_box_pack_start(GTK_BOX(body), ui.mode_free, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(body), ui.mode_erase, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(body), ui.mode_custom, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(body), ui.mode_upgrade, FALSE, FALSE, 0);
     ui.free_note = label_new("No free space? Shrink the Windows partition first, in Windows' "
                              "Disk Management. MyOS can't resize NTFS.",
                              "note", 0);
@@ -1997,8 +2185,12 @@ static gboolean page_ok(int page, char *err, size_t n)
         }
         /* Free space (or custom sizes, which also keep what is there):
            the helper refuses the same cases, this only says so sooner. */
-        const char *why = ui.plan.mode != MODE_ERASE && d
+        const char *why = ui.plan.mode != MODE_ERASE && ui.plan.mode != MODE_UPGRADE && d
             ? disks_free_problem(d, (unsigned long long)MIN_INSTALL_GB * 1000000000ULL) : NULL;
+        if (ui.plan.mode == MODE_UPGRADE && d && !d->upgradable) {
+            snprintf(err, n, "%s", d->why_not[0] ? d->why_not : "That disk cannot be upgraded.");
+            return FALSE;
+        }
         if (why) {
             snprintf(err, n, "%s", why);
             return FALSE;
@@ -2019,8 +2211,15 @@ static gboolean page_ok(int page, char *err, size_t n)
 
 static void mark_work(const char *key, int running)
 {
+    const char **keys = ui.plan.mode == MODE_UPGRADE ? UPGRADE_KEY : WORK_KEY;
+    int known = 0;
+
+    for (int i = 0; i < 6; i++)
+        known |= !strcmp(keys[i], key);
+    if (!known)
+        return;
     for (int i = 0; i < 6; i++) {
-        if (!strcmp(WORK_KEY[i], key)) {
+        if (!strcmp(keys[i], key)) {
             gtk_label_set_text(GTK_LABEL(ui.work_mark[i]), running ? "…" : "✓");
             return;
         }
@@ -2092,6 +2291,9 @@ static void start_helper(void)
     GPid pid;
 
     gather();
+    for (int i = 0; i < 6; i++)
+        gtk_label_set_text(GTK_LABEL(ui.work_lab[i]),
+                           ui.plan.mode == MODE_UPGRADE ? UPGRADE_WORK[i] : WORK[i]);
     if (plan_write(ui.plan_path, &ui.plan)) {
         gtk_label_set_text(GTK_LABEL(ui.file_lab), "Can't write the plan file.");
         return;
@@ -2127,25 +2329,34 @@ static void set_page(int page)
 {
     char name[8];
     ui.page = page;
-    snprintf(name, sizeof name, "%d", page);
-    gtk_stack_set_visible_child_name(GTK_STACK(ui.stack), name);
+    if (page < 0)
+        gtk_stack_set_visible_child_name(GTK_STACK(ui.stack), "ask");
+    else {
+        snprintf(name, sizeof name, "%d", page);
+        gtk_stack_set_visible_child_name(GTK_STACK(ui.stack), name);
+    }
     refresh_side();
     char title[96];
     snprintf(title, sizeof title, "Install MyOS \u2014 %s",
-             page == 3 || page == 4 ? "Disk & partitions" : STEPS[page]);
+             page < 0 ? "Upgrade" : page == 3 || page == 4 ? "Disk & partitions" : STEPS[page]);
     gtk_window_set_title(GTK_WINDOW(ui.window), title);
     gtk_widget_set_sensitive(ui.back, page > 0 && page < 7);
-    gtk_widget_set_visible(ui.extra, page == 8);    /* (the partition page has its own tools) */
+    gtk_widget_set_visible(ui.extra, page == 8 || page < 0);
     if (page == 2)
         gtk_widget_grab_focus(ui.tz_search);    /* type a city straight away */
     if (page == 8)
         gtk_button_set_label(GTK_BUTTON(ui.extra), "Keep trying MyOS");
+    else if (page < 0)
+        gtk_button_set_label(GTK_BUTTON(ui.extra), "Install from the start");
     if (page == 6)
-        gtk_button_set_label(GTK_BUTTON(ui.next), "Install");
+        gtk_button_set_label(GTK_BUTTON(ui.next),
+                             ui.plan.mode == MODE_UPGRADE ? "Upgrade" : "Install");
     else if (page == 7)
         gtk_button_set_label(GTK_BUTTON(ui.next), "Please wait");
     else if (page == 8)
         gtk_button_set_label(GTK_BUTTON(ui.next), "Restart now");
+    else if (page < 0)
+        gtk_button_set_label(GTK_BUTTON(ui.next), "Upgrade");
     else
         gtk_button_set_label(GTK_BUTTON(ui.next), "Next");
     gtk_widget_set_sensitive(ui.next, page != 7);
@@ -2168,6 +2379,32 @@ static void next_clicked(GtkButton *b, gpointer unused)
     }
     if (ui.page == 7)
         return;
+    if (ui.page < 0) {
+        int u = first_upgradable(ui.disks, ui.ndisk);
+        if (u >= 0)
+            ui.disk_sel = u;
+        gather();
+        ui.plan.mode = MODE_UPGRADE;
+        if (ui.mode_upgrade)
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ui.mode_upgrade), TRUE);
+        ui.from_ask = 1;
+        set_page(6);
+        return;
+    }
+    if (ui.page == 3) {
+        gather();
+        if (ui.plan.mode == MODE_UPGRADE) {
+            if (!page_ok(3, err, sizeof err)) {
+                GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(ui.window), GTK_DIALOG_MODAL,
+                                                      GTK_MESSAGE_WARNING, GTK_BUTTONS_OK, "%s", err);
+                gtk_dialog_run(GTK_DIALOG(d));
+                gtk_widget_destroy(d);
+                return;
+            }
+            set_page(6);
+            return;
+        }
+    }
     if (ui.page == 6) {
         char e[256];
         gather();
@@ -2204,6 +2441,13 @@ static void next_clicked(GtkButton *b, gpointer unused)
 static void back_clicked(GtkButton *b, gpointer unused)
 {
     (void)b, (void)unused;
+    if (ui.page == 6 && (ui.from_ask || ui.plan.mode == MODE_UPGRADE)) {
+        if (ui.from_ask)
+            set_page(-1);
+        else
+            set_page(3);
+        return;
+    }
     if (ui.page > 0 && ui.page < 7)
         set_page(ui.page - 1);
 }
@@ -2216,12 +2460,19 @@ static void extra_clicked(GtkButton *b, gpointer unused)
         gtk_window_close(GTK_WINDOW(ui.window));
         return;
     }
+    if (ui.page < 0) {
+        ui.from_ask = 0;
+        set_page(0);
+    }
 }
 
 static void fill_disks(void)
 {
     ui.ndisk = disks_scan(ui.disks, DISKS_MAX);
+    apply_probe(ui.disks, ui.ndisk);
     ui.disk_sel = -1;
+    if (ui.mode_upgrade)
+        gtk_widget_set_sensitive(ui.mode_upgrade, FALSE);
     if (!ui.ndisk) {
         add_row(ui.disk_list, "No disks yet", "the kernel has not listed any", 0);
         gtk_widget_set_sensitive(ui.disk_list, FALSE);
@@ -2229,6 +2480,8 @@ static void fill_disks(void)
     }
     for (int i = 0; i < ui.ndisk; i++) {
         GtkListBoxRow *row = add_disk_row(ui.disk_list, &ui.disks[i], i);
+        if (ui.disks[i].upgradable)
+            gtk_widget_set_sensitive(ui.mode_upgrade, TRUE);
         if (ui.disks[i].in_use) {       /* shown, so it is clear why it isn't offered */
             gtk_list_box_row_set_selectable(row, FALSE);
             gtk_list_box_row_set_activatable(row, FALSE);
@@ -2331,10 +2584,32 @@ static int gtk_install(int argc, char **argv, const char *plan_path)
     g_signal_connect(ui.extra, "clicked", G_CALLBACK(extra_clicked), NULL);
 
     load_defaults();
-    set_page(0);
+    {
+        int u = first_upgradable(ui.disks, ui.ndisk);
+        char live_sys[64], live_kern[64], t[512];
+        live_release(live_sys, sizeof live_sys, live_kern, sizeof live_kern);
+        if (u >= 0 && ui.ask_lab) {
+            snprintf(t, sizeof t,
+                     "%s\nSystem  %s  \u2192  %s\nKernel  %s  \u2192  %s%s",
+                     ui.disks[u].name,
+                     ui.disks[u].system_ver[0] ? ui.disks[u].system_ver : "unknown",
+                     live_sys[0] ? live_sys : "this stick",
+                     ui.disks[u].kernel_ver[0] ? ui.disks[u].kernel_ver : "unknown",
+                     live_kern[0] ? live_kern : "this stick",
+                     live_sys[0] && ui.disks[u].system_ver[0] &&
+                     strcmp(live_sys, ui.disks[u].system_ver) < 0
+                         ? "\nThis stick is older than the disk." : "");
+            gtk_label_set_text(GTK_LABEL(ui.ask_lab), t);
+            ui.disk_sel = u;
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ui.mode_upgrade), TRUE);
+            set_page(-1);
+        } else
+            set_page(0);
+    }
     gtk_window_set_position(GTK_WINDOW(ui.window), GTK_WIN_POS_CENTER);
     gtk_widget_show_all(ui.window);
-    gtk_widget_hide(ui.extra);
+    if (ui.page >= 0)
+        gtk_widget_hide(ui.extra);
     /* MYOS_INSTALL_PAGE=N opens on page N (0-6): for checking one page on
        a test machine without clicking through the ones before it. (After
        show_all: a stack ignores a switch to a page not yet shown.) */
