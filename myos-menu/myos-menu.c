@@ -1729,8 +1729,11 @@ static long root_cardinal(Atom a, long dflt)
    HID_SWIPE_* keys (include/hid.h); X's keycode is the Linux code + 8,
    which holds whatever names the keymap gives them. As on a Mac, the
    desktops follow the fingers: sliding left brings the one on the right,
-   with no wrapping round. Up opens Mission Control. Down closes it, which
-   myos-mission sees itself: it has the keyboard while it is open. */
+   with no wrapping round, and slide there: the change goes to whoever owns
+   _MYOS_SLIDE (myos-mission --keep), which covers the screen and asks
+   IceWM itself; with nobody there, straight to IceWM. Up opens Mission
+   Control. Down closes it, which myos-mission sees itself: it has the
+   keyboard while it is open. */
 #define SWIPE_LEFT  (184 + 8)
 #define SWIPE_RIGHT (185 + 8)
 #define SWIPE_UP    (186 + 8)
@@ -1738,7 +1741,7 @@ static long root_cardinal(Atom a, long dflt)
 
 static void swiped(unsigned kc, Time t)
 {
-    static Atom a_cur, a_num;
+    static Atom a_cur, a_num, a_slide;
     if (kc == SWIPE_UP) {
         open_mission();
         return;
@@ -1748,13 +1751,19 @@ static void swiped(unsigned kc, Time t)
     if (!a_cur) {
         a_cur = XInternAtom(dpy, "_NET_CURRENT_DESKTOP", False);
         a_num = XInternAtom(dpy, "_NET_NUMBER_OF_DESKTOPS", False);
+        a_slide = XInternAtom(dpy, "_MYOS_SLIDE", False);
     }
     long cur = root_cardinal(a_cur, -1), to = cur + (kc == SWIPE_LEFT ? 1 : -1);
     if (cur < 0 || to < 0 || to >= root_cardinal(a_num, 0))
         return;
-    XEvent e = { .xclient = { .type = ClientMessage, .window = root, .message_type = a_cur,
+    Window slider = XGetSelectionOwner(dpy, a_slide);
+    XEvent e = { .xclient = { .type = ClientMessage, .window = slider ? slider : root,
+                              .message_type = slider ? a_slide : a_cur,
                               .format = 32, .data.l = { to, (long)t } } };
-    XSendEvent(dpy, root, False, SubstructureNotifyMask | SubstructureRedirectMask, &e);
+    if (slider)                     /* (no mask: to the program that made the window) */
+        XSendEvent(dpy, slider, False, NoEventMask, &e);
+    else
+        XSendEvent(dpy, root, False, SubstructureNotifyMask | SubstructureRedirectMask, &e);
 }
 
 /* The desktop's scale, as myos-xsettings decided it: _MYOS_SCALE, or 0

@@ -263,7 +263,7 @@ $(MISSION_BIN): live/myos-mission/myos-mission.c live/myos-wm/layout.c live/myos
 	$(CC) $(LOGIN_CFLAGS) -Ilive/myos-wm -c live/myos-mission/myos-mission.c -o $(BUILD)/live/myos-mission.o
 	$(CC) $(LOGIN_CFLAGS) -Ilive/myos-wm -c live/myos-wm/layout.c -o $(BUILD)/live/myos-mission-layout.o
 	$(call LIVE_LINK,$(BUILD)/live/myos-mission.o $(BUILD)/live/myos-mission-layout.o,\
-	  -lX11 -lXrender -lXft -l:libXcomposite.so.1)
+	  -lX11 -lXrender -lXft -l:libXcomposite.so.1 -l:libXi.so.6)
 
 # The Start menu (live/myos-menu): the same libraries, less PAM.
 MENU_BIN := $(LIVE_EXTRA)/usr/bin/myos-menu

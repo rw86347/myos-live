@@ -31,20 +31,26 @@
  * children of the root too; they are drawn where they are, under the
  * dimming, so the first frame of the zoom is the screen as it was.
  * Windows on other desktops are unmapped, and an unmapped window has no
- * pixmap, so their miniatures show each one as a pale pane.
+ * pixmap. Their miniatures show each one as it was when its desktop was
+ * left: a copy of this program started with --keep holds those pictures
+ * for the whole session (see keep()). One it doesn't have is a pale pane.
+ * The keeper also uses them to slide from desktop to desktop when a
+ * taskbar button or a three-finger swipe changes desktop (see slide_frame()).
  *
  * Cost: each frame of the zoom is built in the X server (pixman: in
  * software, on most of our machines) in a back pixmap, then copied to the
  * screen in one go. A slow frame makes a bigger step, so the zoom ends at
  * 250 ms however slow the machine is. Once open, only three things draw:
- * the pictures again at 300 and 700 ms (programs repaint into their new
- * pixmaps after the redirect); the ring and title, which moving the mouse
- * copies away and draws anew; and a drag. A drag first keeps everything
- * but the dragged window in a second pixmap, so each move of the mouse is
- * one copy and one window.
+ * the pictures again at 300 and 700 ms (with no keeper running, programs
+ * repaint into their new pixmaps after the redirect); the ring and title,
+ * which moving the mouse copies away and draws anew; and a drag. A drag
+ * first keeps everything but the dragged window in a second pixmap, so
+ * each move of the mouse is one copy and one window.
  */
 #include <X11/Xft/Xft.h>
+#include <X11/Xatom.h>
 #include <X11/Xlib.h>
+#include <X11/extensions/XI2.h>
 #include <X11/extensions/Xrender.h>
 #include <X11/keysym.h>
 #include <stdio.h>
@@ -63,6 +69,28 @@ Bool XCompositeQueryExtension(Display *, int *, int *);
 void XCompositeRedirectSubwindows(Display *, Window, int);
 Pixmap XCompositeNameWindowPixmap(Display *, Window);
 
+/* Nor libXi's (XInput2.h): the raw button events the keeper watches the
+   taskbar with. The numbers are the protocol's, in XI2.h. */
+typedef struct {
+    int deviceid;
+    int mask_len;
+    unsigned char *mask;
+} XIEventMask;
+typedef struct {                    /* XIRawEvent, as far as the button */
+    int type;
+    unsigned long serial;
+    Bool send_event;
+    Display *display;
+    int extension;
+    int evtype;
+    Time time;
+    int deviceid;
+    int sourceid;
+    int detail;
+} XIRawEvent;
+Status XIQueryVersion(Display *, int *, int *);
+int XISelectEvents(Display *, Window, XIEventMask *, int);
+
 #define MC_MS      250              /* the zoom, as myos-wm's */
 #define FRAME_MS   16               /* about 60 frames a second */
 #define WAIT_MS    150              /* for IceWM to switch, before this goes away */
@@ -75,7 +103,7 @@ Pixmap XCompositeNameWindowPixmap(Display *, Window);
 
 enum {
     A_STACKING, A_CLIENTS, A_DESKTOP, A_CURRENT, A_NDESKS, A_WORKAREA, A_ACTIVE, A_NAME,
-    A_UTF8, A_STATE, A_HIDDEN, A_TYPE, A_ROOTPM, A_SCALE, A_SCALE_AUTO,
+    A_UTF8, A_STATE, A_HIDDEN, A_TYPE, A_ROOTPM, A_SCALE, A_SCALE_AUTO, A_SNAP, A_SLIDE,
     A_SKIP,                         /* from here on: window types nobody picks */
     NATOMS = A_SKIP + 9
 };
@@ -83,8 +111,8 @@ static const char *const atom_names[NATOMS] = {
     "_NET_CLIENT_LIST_STACKING", "_NET_CLIENT_LIST", "_NET_WM_DESKTOP",
     "_NET_CURRENT_DESKTOP", "_NET_NUMBER_OF_DESKTOPS", "_NET_WORKAREA", "_NET_ACTIVE_WINDOW",
     "_NET_WM_NAME", "UTF8_STRING", "_NET_WM_STATE", "_NET_WM_STATE_HIDDEN",
-    "_NET_WM_WINDOW_TYPE", "_XROOTPMAP_ID", "_MYOS_SCALE", "_MYOS_SCALE_AUTO",
-    "_NET_WM_WINDOW_TYPE_DESKTOP", "_NET_WM_WINDOW_TYPE_DOCK", "_NET_WM_WINDOW_TYPE_MENU",
+    "_NET_WM_WINDOW_TYPE", "_XROOTPMAP_ID", "_MYOS_SCALE", "_MYOS_SCALE_AUTO", "_MYOS_SNAPSHOT",
+    "_MYOS_SLIDE", "_NET_WM_WINDOW_TYPE_DESKTOP", "_NET_WM_WINDOW_TYPE_DOCK", "_NET_WM_WINDOW_TYPE_MENU",
     "_NET_WM_WINDOW_TYPE_TOOLTIP", "_NET_WM_WINDOW_TYPE_NOTIFICATION",
     "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU", "_NET_WM_WINDOW_TYPE_POPUP_MENU",
     "_NET_WM_WINDOW_TYPE_COMBO", "_NET_WM_WINDOW_TYPE_DND",
@@ -107,6 +135,8 @@ struct thumb {                      /* a window on this desktop */
 struct pane {                       /* a window on another desktop */
     int desk;
     struct mc_rect at;
+    Picture pic;                    /* as it was when it went (keep()), or None: a pale pane */
+    int op, pw, ph;                 /* ...and the picture's size */
 };
 
 struct fixed {                      /* the taskbar, the icons: they stay put */
@@ -279,6 +309,33 @@ static Picture picture_of(Window w, Visual *v, int *op)
     return pic;
 }
 
+/* The picture myos-mission --keep holds of frame f, which is off the
+   screen (see keep()), or None. The pixmap is another program's: it is
+   checked to be there still and to be what the property says, and once
+   a picture is made of it, it stays until this program ends. */
+static Picture snapshot_of(Window f, const XWindowAttributes *a, struct pane *pn)
+{
+    unsigned long v[3];
+    XRenderPictFormat *pf = XRenderFindVisualFormat(dpy, a->visual);
+    if (!pf || prop32(f, atom[A_SNAP], v, 3) != 3)
+        return None;
+    Window r;
+    int x, y;
+    unsigned w, h, b, d;
+    xerr = 0;
+    if (!XGetGeometry(dpy, (Pixmap)v[0], &r, &x, &y, &w, &h, &b, &d) || xerr || w != v[1] ||
+        h != v[2] || (int)d != a->depth)
+        return None;
+    Picture pic = XRenderCreatePicture(dpy, (Pixmap)v[0], pf, 0, NULL);
+    XRenderSetPictureFilter(dpy, pic, FilterBilinear, NULL, 0);
+    XSync(dpy, False);
+    if (xerr)
+        return None;
+    pn->pw = (int)w, pn->ph = (int)h;
+    pn->op = pf->type == PictTypeDirect && pf->direct.alphaMask ? PictOpOver : PictOpSrc;
+    return pic;
+}
+
 /* Every window, bottom to top: this desktop's get a picture and a place;
    other desktops' are remembered for their miniatures. */
 static void collect(void)
@@ -303,8 +360,11 @@ static void collect(void)
         int sticky = on == 0xFFFFFFFFul;
         if (on != current && !sticky) {
             if (on < (unsigned long)ndesks && npane < MC_MAX &&
-                !has_atom(w, atom[A_STATE], A_HIDDEN, A_HIDDEN + 1))
-                pane[npane++] = (struct pane){(int)on, at};
+                !has_atom(w, atom[A_STATE], A_HIDDEN, A_HIDDEN + 1)) {
+                struct pane *pn = &pane[npane++];
+                *pn = (struct pane){(int)on, at, None, PictOpSrc, 0, 0};
+                pn->pic = snapshot_of(f, &a, pn);
+            }
             continue;
         }
         if (a.map_state != IsViewable || nth >= MC_MAX)
@@ -460,8 +520,12 @@ static void draw_bar(int off)
         for (int i = 0; i < npane; i++)
             if (pane[i].desk == d) {
                 struct mc_rect a = pane[i].at;
-                fill(&pale, (struct mc_rect){m.x + (int)(a.x * k), m.y + (int)(a.y * k),
-                                             (int)(a.w * k), (int)(a.h * k)}, m);
+                struct mc_rect r = {m.x + (int)(a.x * k), m.y + (int)(a.y * k), (int)(a.w * k),
+                                    (int)(a.h * k)};
+                if (pane[i].pic)
+                    put(pane[i].pic, pane[i].op, pane[i].pw, pane[i].ph, r, m);
+                else
+                    fill(&pale, r, m);
             }
         for (int i = 0; i < nth; i++) {
             if (d != (int)current && !th[i].sticky)
@@ -710,8 +774,8 @@ static void glide_from_now(struct timespec *last)
 static void move_to_desk(int i, int d, struct timespec *last)
 {
     ask_wm(th[i].client, atom[A_DESKTOP], d, 2);
-    if (npane < MC_MAX)
-        pane[npane++] = (struct pane){d, th[i].at};
+    if (npane < MC_MAX)             /* (its pixmap keeps the picture once IceWM unmaps it) */
+        pane[npane++] = (struct pane){d, th[i].at, th[i].pic, th[i].op, th[i].at.w, th[i].at.h};
     nth--;
     memmove(&th[i], &th[i + 1], (size_t)(nth - i) * sizeof th[0]);
     glide_from_now(last);
@@ -758,7 +822,435 @@ static void wait_root(Atom a, unsigned long want)
     } while (ms_since(&t0) < WAIT_MS);
 }
 
-int main(void)
+/* --- keeping the pictures: myos-mission --keep ---------------------------
+
+   IceWM unmaps the windows of every desktop but the one shown, and an
+   unmapped window has no pixmap. But a pixmap that a client has named
+   (XCompositeNameWindowPixmap) stays, with what was last drawn in it,
+   until that client frees it: compositors fade a closed window out that
+   way. So a copy of this program runs for the whole session
+   (/etc/icewm/startup) and keeps the root's children redirected. It names
+   each one's pixmap whenever the server makes a new one (on map, and on a
+   new size), and once the window is unmapped it shrinks the picture to a
+   quarter each way (a miniature is a ninth of the screen wide). The
+   picture's id and size go in the window's _MYOS_SNAPSHOT property, for
+   snapshot_of(). Nothing there is live: a window off the screen draws
+   nothing, so it shows as it was when its desktop was left.
+
+   Cost: a redirected window is drawn into its pixmap and the X server
+   copies what changed to the screen, one copy more than plain X. A window
+   on the screen costs no more memory (the name is its own pixmap), one
+   off it a sixteenth of its size. Shrinking waits until no events do, so
+   a window that closes (unmapped, then destroyed) isn't shrunk first. */
+#define KEEP_MAX 128
+
+struct kept {
+    Window w;
+    int x, y;                       /* where it is */
+    Pixmap pm;                      /* its own pixmap; once it is off the screen, a copy */
+    Picture pic;                    /* of pm, made the first time a slide draws it */
+    Visual *vis;
+    int depth, pw, ph;              /* pm's */
+    int off;                        /* unmapped */
+    int shrink;                     /* ...and not shrunk yet */
+};
+static struct kept kept[KEEP_MAX];
+static int nkept;
+static Window cover;                /* the slide's window (see below): never kept */
+
+static struct kept *find_kept(Window w)
+{
+    for (int i = 0; i < nkept; i++)
+        if (kept[i].w == w)
+            return &kept[i];
+    return NULL;
+}
+
+static Picture kept_picture(struct kept *k, int *op)
+{
+    XRenderPictFormat *pf = XRenderFindVisualFormat(dpy, k->vis);
+    if (!pf)
+        return None;
+    if (!k->pic)
+        k->pic = XRenderCreatePicture(dpy, k->pm, pf, 0, NULL);
+    *op = pf->type == PictTypeDirect && pf->direct.alphaMask ? PictOpOver : PictOpSrc;
+    return k->pic;
+}
+
+/* Before pm goes. */
+static void drop_picture(struct kept *k)
+{
+    if (k->pic)
+        XRenderFreePicture(dpy, k->pic);
+    k->pic = None;
+}
+
+static void publish(const struct kept *k)
+{
+    long v[3] = {(long)k->pm, k->pw, k->ph};
+    XChangeProperty(dpy, k->w, atom[A_SNAP], XA_CARDINAL, 32, PropModeReplace,
+                    (unsigned char *)v, 3);
+}
+
+/* Window w is on the screen in a new pixmap (just mapped, or resized):
+   hold that one. Menus and tooltips are held too: IceWM's frames are
+   override-redirect just as they are, and a hidden one is small. */
+static void keep_window(Window w)
+{
+    XWindowAttributes a;
+    if (w == cover || !XGetWindowAttributes(dpy, w, &a) || a.class != InputOutput ||
+        a.map_state != IsViewable)
+        return;
+    struct kept *k = find_kept(w);
+    if (!k) {
+        if (nkept == KEEP_MAX)
+            return;
+        k = &kept[nkept++];
+        k->w = w, k->pm = None, k->pic = None;
+    }
+    drop_picture(k);
+    if (k->pm)
+        XFreePixmap(dpy, k->pm);
+    k->x = a.x, k->y = a.y;
+    k->pm = XCompositeNameWindowPixmap(dpy, w);
+    k->vis = a.visual;
+    k->depth = a.depth;
+    k->pw = a.width + 2 * a.border_width;
+    k->ph = a.height + 2 * a.border_width;
+    k->off = k->shrink = 0;
+    publish(k);
+}
+
+static void forget(Window w)
+{
+    struct kept *k = find_kept(w);
+    if (!k)
+        return;
+    drop_picture(k);
+    if (k->pm)
+        XFreePixmap(dpy, k->pm);
+    *k = kept[--nkept];
+}
+
+/* Half the size each way, twice. Bilinear filtering at exactly half the
+   size samples where four pixels meet, so each pass is a 2x2 average and
+   the two a 4x4 one, with no fine detail turning to noise. Pad: an odd
+   last row or column repeats instead of fading out. */
+static void shrink(struct kept *k)
+{
+    XRenderPictFormat *pf = XRenderFindVisualFormat(dpy, k->vis);
+    k->shrink = 0;
+    if (!pf)
+        return;
+    drop_picture(k);
+    for (int pass = 0; pass < 2 && k->pw > 1 && k->ph > 1; pass++) {
+        int w = (k->pw + 1) / 2, h = (k->ph + 1) / 2;
+        Pixmap half = XCreatePixmap(dpy, root, w, h, k->depth);
+        XRenderPictureAttributes pa = {.repeat = RepeatPad};
+        Picture from = XRenderCreatePicture(dpy, k->pm, pf, CPRepeat, &pa);
+        Picture to = XRenderCreatePicture(dpy, half, pf, 0, NULL);
+        XTransform xf = {{
+            {XDoubleToFixed(2), 0, 0},
+            {0, XDoubleToFixed(2), 0},
+            {0, 0, XDoubleToFixed(1)},
+        }};
+        XRenderSetPictureTransform(dpy, from, &xf);
+        XRenderSetPictureFilter(dpy, from, FilterBilinear, NULL, 0);
+        XRenderComposite(dpy, PictOpSrc, from, None, to, 0, 0, 0, 0, 0, 0, w, h);
+        XRenderFreePicture(dpy, from);
+        XRenderFreePicture(dpy, to);
+        XFreePixmap(dpy, k->pm);
+        k->pm = half;
+        k->pw = w, k->ph = h;
+    }
+    publish(k);
+}
+
+/* --- sliding between desktops (the keeper too) ------------------------------
+
+   On a Mac the desktops lie side by side: going to another one slides
+   this one out and that one in, and the Dock stays put. IceWM just
+   switches. So just before it does, the keeper puts the screen above the
+   taskbar, as it is, on a window of its own, the cover (nobody can tell
+   it is there), and then slides that picture out while the new desktop
+   comes in from the side it lies on. The new desktop is drawn from its
+   windows' pixmaps: redirected, they are whole under the cover, and live,
+   so a program repainting after the switch shows as it does. When the
+   cover goes, the real desktop is the last frame.
+
+   "Just before": IceWM acts on a taskbar button when it comes up
+   (TaskButton::handleButton), so the cover goes up when the left button
+   goes down there, which XInput 2's raw events tell this program without
+   taking the click from IceWM. A swipe comes here first: myos-menu sends
+   it to the owner of the _MYOS_SLIDE selection, the cover, and this asks
+   IceWM. If the desktop doesn't change, the cover comes down when IceWM
+   activates a window here instead, or COVER_MS after the button comes up.
+
+   Cost: a press on the taskbar copies the screen above it once, in the X
+   server. A frame of the slide is the old picture, then the new desktop's
+   wallpaper and windows: about two screens of copying, and an XQueryTree
+   for the order they are stacked in. */
+#define SLIDE_MS 350                /* as myos-wm's */
+#define COVER_MS 250                /* after the button comes up, for IceWM to act */
+#define HOLD_MS  2000               /* at most while it is held */
+
+static XRenderPictFormat *root_fmt;
+static Picture cover_pic, old_pic, wall_pic;
+static Pixmap old_pm;               /* the screen above the taskbar, as it was */
+static GC shot_gc;                  /* copies the screen, windows and all */
+static int cover_h, covered, xi_op, slide_dir;
+static long cover_until;            /* ms: the cover comes down then, if no slide began */
+static long slide_t0;               /* ms: when the slide began, 0 if none */
+static unsigned long desk;          /* the desktop IceWM shows */
+
+static long now_ms(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+/* Where the work area ends: the top of the taskbar. */
+static int taskbar_top(void)
+{
+    unsigned long wa[4 * MAX_DESKS];
+    int n = prop32(root, atom[A_WORKAREA], wa, 4 * MAX_DESKS);
+    int k = (int)desk * 4 + 4 <= n ? (int)desk * 4 : 0;
+    long top = n >= 4 ? (long)(wa[k + 1] + wa[k + 3]) : sh;
+    return top > 0 && top < sh ? (int)top : sh;
+}
+
+static void cover_up(int h)
+{
+    old_pm = XCreatePixmap(dpy, root, sw, h, depth);
+    XCopyArea(dpy, root, old_pm, shot_gc, 0, 0, sw, h, 0, 0);
+    old_pic = XRenderCreatePicture(dpy, old_pm, root_fmt, 0, NULL);
+    XSetWindowBackgroundPixmap(dpy, cover, old_pm);
+    XMoveResizeWindow(dpy, cover, 0, 0, sw, h);
+    XMapRaised(dpy, cover);
+    XFlush(dpy);                    /* before IceWM gets to act */
+    cover_h = h;
+    covered = 1;
+    slide_t0 = 0;
+}
+
+static void cover_down(void)
+{
+    XUnmapWindow(dpy, cover);
+    XSetWindowBackgroundPixmap(dpy, cover, None);
+    XRenderFreePicture(dpy, old_pic);
+    XFreePixmap(dpy, old_pm);
+    if (wall_pic)
+        XRenderFreePicture(dpy, wall_pic);
+    wall_pic = None;
+    covered = 0;
+    slide_t0 = 0;
+}
+
+/* The left button went down. On the taskbar the cover goes up: the
+   window under the pointer starts where the work area ends, which
+   Mission Control, a full-screen window or a menu over the bar don't. */
+static void pressed(void)
+{
+    Window r, c;
+    int x, y, wx, wy;
+    unsigned m;
+    XWindowAttributes a;
+    if (covered || reduce_motion() || !XQueryPointer(dpy, root, &r, &c, &x, &y, &wx, &wy, &m) ||
+        !c)
+        return;
+    int top = taskbar_top();
+    if (y < top || !XGetWindowAttributes(dpy, c, &a) || a.y < top)
+        return;
+    cover_up(top);
+    cover_until = now_ms() + HOLD_MS;
+}
+
+/* IceWM changed desktop, or did something else while the cover is up. */
+static void desk_changed(void)
+{
+    unsigned long d = desk;
+    prop32(root, atom[A_CURRENT], &d, 1);
+    if (covered && !slide_t0) {
+        if (d == desk) {
+            cover_down();
+        } else {
+            slide_dir = d > desk ? 1 : -1;
+            slide_t0 = now_ms();
+            wall_pic = wallpaper(root_fmt);
+        }
+    }
+    desk = d;
+}
+
+/* The slide at e (0 .. 1): the old desktop's picture going, the new
+   desktop coming in beside it. The stacking order is asked for first:
+   while this program waits for an answer the X server is idle, and puts
+   whatever the cover has so far on the screen, half a frame. */
+static void slide_frame(double e)
+{
+    Window r, parent, *kids = NULL;
+    unsigned n = 0;
+    if (!XQueryTree(dpy, root, &r, &parent, &kids, &n))
+        n = 0;
+    int ox = lerp_i(0, -slide_dir * sw, e), nx = ox + slide_dir * sw;
+    XRenderPictureAttributes no_clip = {.clip_mask = None};
+    XRenderChangePicture(dpy, cover_pic, CPClipMask, &no_clip);
+    XRenderComposite(dpy, PictOpSrc, old_pic, None, cover_pic, 0, 0, 0, 0, ox, 0, sw, cover_h);
+    int x0 = nx > 0 ? nx : 0, x1 = nx < 0 ? nx + sw : sw;
+    XRectangle clip = {(short)x0, 0, (unsigned short)(x1 - x0), (unsigned short)cover_h};
+    XRenderSetPictureClipRectangles(dpy, cover_pic, 0, 0, &clip, 1);
+    if (wall_pic)
+        XRenderComposite(dpy, PictOpSrc, wall_pic, None, cover_pic, 0, 0, 0, 0, nx, 0, sw,
+                         cover_h);
+    else
+        XRenderFillRectangle(dpy, PictOpSrc, cover_pic, &dark, x0, 0, x1 - x0, cover_h);
+    for (unsigned i = 0; i < n; i++) {          /* bottom to top */
+        struct kept *k = find_kept(kids[i]);
+        int op;
+        Picture pic = k && !k->off && k->y < cover_h ? kept_picture(k, &op) : None;
+        if (pic)
+            XRenderComposite(dpy, op, pic, None, cover_pic, 0, 0, 0, 0, nx + k->x, k->y, k->pw,
+                             k->ph);
+    }
+    if (kids)
+        XFree(kids);
+    XRaiseWindow(dpy, cover);       /* (IceWM restacks its frames as it switches) */
+}
+
+static int keep(XRenderPictFormat *fmt)
+{
+    int evb, erb;
+    if (!XCompositeQueryExtension(dpy, &evb, &erb))
+        return 1;
+    root_fmt = fmt;
+    depth = DefaultDepth(dpy, DefaultScreen(dpy));
+    XCompositeRedirectSubwindows(dpy, root, COMPOSITE_REDIRECT_AUTOMATIC);
+    XSelectInput(dpy, root, SubstructureNotifyMask | PropertyChangeMask);
+    prop32(root, atom[A_CURRENT], &desk, 1);
+
+    /* The cover takes the clicks that land on it mid-slide: they would
+       otherwise go through to the root, which is IceWM's menu. */
+    XSetWindowAttributes ca = {.override_redirect = True,
+                               .event_mask = ButtonPressMask | ButtonReleaseMask};
+    cover = XCreateWindow(dpy, root, 0, 0, sw, sh, 0, CopyFromParent, InputOutput,
+                          CopyFromParent, CWOverrideRedirect | CWEventMask, &ca);
+    cover_pic = XRenderCreatePicture(dpy, cover, fmt, 0, NULL);
+    XGCValues gv = {.subwindow_mode = IncludeInferiors, .graphics_exposures = False};
+    shot_gc = XCreateGC(dpy, root, GCSubwindowMode | GCGraphicsExposures, &gv);
+    XSetSelectionOwner(dpy, atom[A_SLIDE], cover, CurrentTime);
+    int xev, xerrb, major = 2, minor = 2;
+    if (XQueryExtension(dpy, "XInputExtension", &xi_op, &xev, &xerrb) &&
+        XIQueryVersion(dpy, &major, &minor) == Success) {
+        unsigned char bits[XIMaskLen(XI_LASTEVENT)] = {0};
+        XISetMask(bits, XI_RawButtonPress);
+        XISetMask(bits, XI_RawButtonRelease);
+        XIEventMask em = {XIAllMasterDevices, (int)sizeof bits, bits};
+        XISelectEvents(dpy, root, &em, 1);
+    }
+
+    Window r, parent, *kids = NULL;
+    unsigned n = 0;
+    if (XQueryTree(dpy, root, &r, &parent, &kids, &n)) {
+        for (unsigned i = 0; i < n; i++) {
+            XDeleteProperty(dpy, kids[i], atom[A_SNAP]);    /* (a keeper before this one's) */
+            keep_window(kids[i]);
+        }
+        if (kids)
+            XFree(kids);
+    }
+    int fd = ConnectionNumber(dpy);
+    for (;;) {
+        while (XPending(dpy)) {
+            XEvent e;
+            XNextEvent(dpy, &e);
+            struct kept *k;
+            switch (e.type) {
+            case MapNotify:
+                keep_window(e.xmap.window);
+                break;
+            case ConfigureNotify: {
+                XConfigureEvent *c = &e.xconfigure;
+                if (!(k = find_kept(c->window)))
+                    break;
+                k->x = c->x, k->y = c->y;
+                if (!k->off && (k->pw != c->width + 2 * c->border_width ||
+                                k->ph != c->height + 2 * c->border_width))
+                    keep_window(c->window);
+                break;
+            }
+            case UnmapNotify:
+                if ((k = find_kept(e.xunmap.window)))
+                    k->off = k->shrink = 1;
+                break;
+            case ReparentNotify:
+                if (e.xreparent.parent != root)
+                    forget(e.xreparent.window);
+                break;
+            case DestroyNotify:
+                forget(e.xdestroywindow.window);
+                break;
+            case PropertyNotify:
+                if (e.xproperty.window == root &&
+                    (e.xproperty.atom == atom[A_CURRENT] ||
+                     (e.xproperty.atom == atom[A_ACTIVE] && covered && !slide_t0)))
+                    desk_changed();
+                break;
+            case ClientMessage:     /* a swipe (myos-menu): l0 the desktop, l1 the time */
+                if (e.xclient.window != cover || e.xclient.message_type != atom[A_SLIDE])
+                    break;
+                if (!covered && !reduce_motion())
+                    cover_up(taskbar_top());
+                if (covered && !slide_t0)
+                    cover_until = now_ms() + COVER_MS;
+                ask_wm(root, atom[A_CURRENT], e.xclient.data.l[0], e.xclient.data.l[1]);
+                break;
+            case GenericEvent:
+                if (e.xcookie.extension != xi_op || !XGetEventData(dpy, &e.xcookie))
+                    break;
+                if (((XIRawEvent *)e.xcookie.data)->detail == Button1) {
+                    if (e.xcookie.evtype == XI_RawButtonPress)
+                        pressed();
+                    else if (covered && !slide_t0)
+                        cover_until = now_ms() + COVER_MS;
+                }
+                XFreeEventData(dpy, &e.xcookie);
+                break;
+            }
+        }
+        long now = now_ms(), wait = -1;
+        if (slide_t0) {
+            double p = (double)(now - slide_t0) / SLIDE_MS;
+            if (p >= 1) {
+                cover_down();
+            } else {
+                slide_frame(ease(p));
+                XSync(dpy, False);  /* the server has drawn it: pace by that */
+                long spent = now_ms() - now;
+                wait = spent < FRAME_MS ? FRAME_MS - spent : 0;
+            }
+        } else if (covered) {
+            if (now >= cover_until)
+                cover_down();
+            else
+                wait = cover_until - now;
+        }
+        if (!covered)
+            for (int i = 0; i < nkept; i++)
+                if (kept[i].shrink)
+                    shrink(&kept[i]);
+        if (XPending(dpy))
+            continue;
+        XFlush(dpy);                /* select does not send what is waiting to go out */
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(fd, &fds);
+        struct timeval tv = {wait / 1000, (wait % 1000) * 1000};
+        select(fd + 1, &fds, NULL, NULL, wait < 0 ? NULL : &tv);
+    }
+}
+
+int main(int argc, char **argv)
 {
     dpy = XOpenDisplay(NULL);
     if (!dpy)
@@ -774,6 +1266,8 @@ int main(void)
     if (!fmt)
         return 1;                   /* no XRender */
     XInternAtoms(dpy, (char **)atom_names, NATOMS, False, atom);
+    if (argc > 1 && !strcmp(argv[1], "--keep"))
+        return keep(fmt);
     prop32(root, atom[A_CURRENT], &current, 1);
     unsigned long nd = 4;
     prop32(root, atom[A_NDESKS], &nd, 1);
@@ -960,8 +1454,7 @@ out:
         wait_root(atom[A_ACTIVE], th[pick].client);
     }
     /* Closing the display frees every pixmap and picture made here and
-       ends the redirection: the windows go back to being drawn straight
-       to the screen. */
+       ends this program's redirection; the keeper's (keep()) goes on. */
     XDestroyWindow(dpy, win);
     XCloseDisplay(dpy);
     return 0;

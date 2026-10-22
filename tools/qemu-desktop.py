@@ -25,6 +25,9 @@ one command per line (# starts a comment):
                    is there (needs Pillow)
   click            the left button
   shot NAME        the screen to SHOT_DIR/NAME.png
+  burst NAME N MS  N screens, MS milliseconds apart, to NAME-1.png ... NAME-N.png:
+                   an animation's frames (start it in the background first,
+                   `sh ... setsid -f sh -c 'sleep 1; ...'`)
   lid              the lid shuts, or opens if it is shut: a CPU added in
                    QEMU's monitor, which a SLEEPTEST=1 kernel takes for the
                    lid (kernel/fakelid_test.c). QEMU_EXTRA needs
@@ -55,6 +58,8 @@ and, from inside the machine, over ssh:
                    all here even when slowed down.
   get PATH [NAME]  copy the file PATH out to SHOT_DIR/NAME (its own name if
                    NAME is left out)
+  put FILE PATH    copy FILE on this Mac in to PATH (a newer build of one
+                   program, say, without making a new disk)
 
 The machine: 4 GiB, no PIT, a Cirrus card (so the firmware's 800x600
 framebuffer, simplefb), as in make test-uefi-login. The pointer is a PS/2
@@ -92,7 +97,7 @@ def free_port():
 
 lines = [l.split('#', 1)[0].strip() for l in open(script)]
 lines = [l for l in lines if l]
-want_ssh = any(l.split()[0] in ('sshkey', 'sh', 'xdo', 'text', 'get') for l in lines)
+want_ssh = any(l.split()[0] in ('sshkey', 'sh', 'xdo', 'text', 'get', 'put') for l in lines)
 SER, MON, SSH = free_port(), free_port(), free_port()
 net = (['-netdev', 'user,id=net0,hostfwd=tcp:127.0.0.1:%d-:22' % SSH, '-device', 'e1000,netdev=net0']
        if want_ssh else ['-net', 'none'])
@@ -217,19 +222,20 @@ key_file = os.path.join(shot_dir, 'desktop-key')
 ssh_user = 'myos'
 
 
-def guest(cmd, out_path=None, timeout=120):
+def guest(cmd, out_path=None, timeout=120, in_path=None):
     """Run cmd in the machine over ssh: (exit status, output). The serial
     port is read meanwhile, so the machine never waits on a full buffer;
-    the output goes to a file, so a big one can't fill a pipe and stall."""
+    the output goes to a file, so a big one can't fill a pipe and stall.
+    in_path, if given, is cmd's input."""
     out_path = out_path or os.path.join(shot_dir, 'desktop-ssh.out')
-    with open(out_path, 'wb') as out:
+    with open(out_path, 'wb') as out, open(in_path or os.devnull, 'rb') as inp:
         p = subprocess.Popen(['ssh', '-i', key_file, '-p', str(SSH), '-o', 'IdentitiesOnly=yes',
                               '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
                               '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null',
                               '-o', 'LogLevel=ERROR', ssh_user + '@127.0.0.1',
                               # X wants the session's cookie (myos-login writes it)
                               'export XAUTHORITY="$HOME/.Xauthority"; ' + cmd],
-                             stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
+                             stdin=inp, stdout=out, stderr=subprocess.STDOUT)
         end = time.time() + timeout
         while p.poll() is None:
             if time.time() > end:
@@ -306,15 +312,22 @@ try:
         elif op == 'click':
             monitor('mouse_button 1', 0.1)
             monitor('mouse_button 0', 0.1)
-        elif op == 'shot':
-            ppm = os.path.join(shot_dir, arg + '.ppm')
-            monitor('screendump ' + ppm, 2)
-            try:
-                from PIL import Image
-                Image.open(ppm).save(os.path.join(shot_dir, arg + '.png'))
-                os.remove(ppm)
-            except ImportError:
-                pass                    # (no Pillow: keep the .ppm)
+        elif op in ('shot', 'burst'):
+            name, n, ms = (arg.split() + ['1', '0'])[:3] if op == 'burst' else (arg, '1', '0')
+            names = [name] if op == 'shot' else ['%s-%d' % (name, i + 1) for i in range(int(n))]
+            for i, nm in enumerate(names):
+                monitor('screendump ' + os.path.join(shot_dir, nm + '.ppm'),
+                        2 if op == 'shot' else int(ms) / 1000)
+            if op == 'burst':
+                pump(2)                 # (the last one written)
+            for nm in names:
+                ppm = os.path.join(shot_dir, nm + '.ppm')
+                try:
+                    from PIL import Image
+                    Image.open(ppm).save(os.path.join(shot_dir, nm + '.png'))
+                    os.remove(ppm)
+                except ImportError:
+                    pass                # (no Pillow: keep the .ppm)
         elif op == 'lid':
             cpus += 1
             monitor('device_add qemu64-x86_64-cpu,id=lid%d,socket-id=0,core-id=%d,thread-id=0'
@@ -347,6 +360,13 @@ try:
                 sys.exit('qemu-desktop: could not get %s (%d): %s'
                          % (path, rc, open(dest, 'rb').read(200).decode(errors='replace')))
             print('got %s -> %s' % (path, dest), flush=True)
+        elif op == 'put':
+            src, _, path = arg.partition(' ')
+            rc, out = guest('cat > ' + shlex.quote(path), in_path=src)
+            if rc:
+                sys.exit('qemu-desktop: could not put %s (%d): %s'
+                         % (path, rc, out[:200].decode(errors='replace')))
+            print('put %s -> %s' % (src, path), flush=True)
         else:
             sys.exit('qemu-desktop: unknown command: ' + line)
 finally:
