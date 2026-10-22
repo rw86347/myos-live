@@ -13,10 +13,13 @@ sshkey
 sh pgrep -l myos-powerd && pgrep -l myos-idle && ls -l /run/myos/power
 shot sleep-1-desktop
 # The lid shuts: the lock screen, then sleep. It opens: awake, locked. The
-# live account has no password, so Enter opens it.
+# live account has no password, so Enter opens it. myos-sleepcheck, writing
+# a line a second, must find the gap (8 s asleep: it counts 5 or more).
+sh setsid -f myos-sleepcheck > /dev/null 2>&1 < /dev/null; sleep 3; tail -n 2 ~/sleep-check.txt
 lid
 next sleep: asleep
 shot sleep-2-asleep
+wait 8
 lid
 next sleep: woken by the lid
 wait 3
@@ -24,6 +27,7 @@ shot sleep-3-locked
 key ret
 wait 3
 sh ! pgrep -l myos-lock && echo UNLOCKED-LID
+sh grep -A 2 ASLEEP ~/sleep-check.txt && pkill -f '[m]yos-sleepcheck'
 # Now with a password. The Start menu's Sleep; a key wakes it.
 sh echo myos:sleep42 | doas chpasswd && echo PASSWORD-SET
 xdo mousemove 60 585 click 1

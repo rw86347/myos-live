@@ -1,0 +1,54 @@
+#!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
+# myos-sleepcheck — did closing the lid really put the computer to sleep?
+#
+# Run it, close the lid, wait a minute, open it and unlock. Every second it
+# writes the time and the uptime to ~/sleep-check.txt, with a sync, so the
+# lines are on the disk. Asleep, every program stops (this one too) and the
+# kernel's tick is off, so the uptime stands still; the wall clock jumps on
+# waking by the time asleep. So a sleep is a gap in the lines with the
+# uptime nearly unchanged across it. A lid that only turned the screen off
+# leaves no gap; a computer that hung leaves a gap with the uptime moving.
+# Then the kernel's own line: how long, what woke it, how far the
+# battery-backed CMOS clock moved (a check on the wall clock's jump), and
+# how long waking took. Compare the clock with a phone, too.
+# It only looks: nothing is changed. Ctrl+C stops it.
+
+# Started from the desktop there is no terminal: open one and run in it.
+if ! { [ -t 0 ] && [ -t 1 ]; } && [ -n "${DISPLAY:-}" ]; then
+    exec xterm -title "Sleep Check" -geometry 100x20 -fa "DejaVu Sans Mono" -fs 10 -e "$0" "$@"
+fi
+
+log=${1:-$HOME/sleep-check.txt}
+GAP=5                                   # seconds without a line that count
+
+echo "Sleep check: close the lid, wait a minute, open it and unlock."
+echo "A line a second goes to $log (Ctrl+C stops)."
+echo "== started $(date)" >> "$log"
+last_s= last_cs=
+while :; do
+    set -- $(date '+%s %Y-%m-%d %H:%M:%S')
+    read -r up _ < /proc/uptime
+    cs=$(( ${up%.*} * 100 + 1${up#*.} - 100 ))     # uptime in 1/100 s
+    line="$2 $3  uptime $up s"
+    if [ -n "$last_s" ] && [ $(( $1 - last_s )) -ge $GAP ]; then
+        gap=$(( $1 - last_s ))
+        moved=$(( (cs - last_cs) / 100 ))
+        if [ $moved -le 2 ]; then
+            note="ASLEEP for about $gap s: no line for $gap s, and the uptime moved $moved s"
+        else
+            note="NOT ASLEEP: no line for $gap s, but the uptime moved $moved s too (stuck, not sleeping)"
+        fi
+        kernel=$(dmesg | grep 'sleep: woken' | tail -n 1 | sed 's/^[[:space:]]*//')
+        printf '\n'                     # (the screen's one-line counter ends)
+        printf '%s\n  >>> %s\n  >>> kernel: %s\n' "$line" "$note" \
+            "${kernel:-no sleep in the kernel log}" | tee -a "$log"
+    else
+        echo "$line" >> "$log"
+        printf '\r%s ' "$line"
+    fi
+    sync
+    last_s=$1 last_cs=$cs
+    sleep 1
+done
