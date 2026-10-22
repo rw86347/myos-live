@@ -11,12 +11,9 @@ myos-menu &
 myos-mission --keep &
 # myos-wifi is the Wi-Fi icon in the tray (see live/myos-wifi/myos-wifi.c).
 myos-wifi &
-# Network Check on the desktop while Wi-Fi gets online is being debugged
-# (see /usr/bin/myos-netcheck). A link, so a newer disk's script is the one
-# that runs; ".command" makes the desktop run it rather than open it in an editor.
-mkdir -p "$HOME/Desktop"
-[ -e "$HOME/Desktop/Network Check.command" ] ||
-    ln -s /usr/bin/myos-netcheck "$HOME/Desktop/Network Check.command"
+# Network Check was on the desktop while Wi-Fi was being debugged; the stick
+# keeps homes across rewrites, so take down the link one kept from then.
+[ -L "$HOME/Desktop/Network Check.command" ] && rm -f "$HOME/Desktop/Network Check.command"
 # myos-desktop draws ~/Desktop on the wallpaper, and the right-click menu
 # (see live/myos-desktop/myos-desktop.c).
 myos-desktop &

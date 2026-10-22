@@ -11,9 +11,7 @@
 # Sized to fit one xterm screen, so a photo of it is the whole report. A copy
 # is saved in ~/network-check.txt.
 #
-# On the desktop as "Network Check.command" (a link made by /etc/icewm/startup;
-# like the Mac's .command files, a double-click runs it in a terminal).
-# It only looks: nothing is changed.
+# Run it in a terminal: myos-netcheck. It only looks: nothing is changed.
 
 # Started from the desktop there is no terminal: open one and run in it.
 if ! { [ -t 0 ] && [ -t 1 ]; } && [ -n "${DISPLAY:-}" ]; then
