@@ -70,7 +70,8 @@ static struct {
     char user[64], name[64];
     char pass[PASS_MAX];
     int passlen;
-    int no_password, grabbed;
+    int no_password;                /* 1 or 0; -1 until PAM was asked */
+    int grabbed;
     const char *note;
 } ui;
 
@@ -250,8 +251,10 @@ static void redraw(void)
 
     int x = panel_x() + sc(108), y = panel_y();
     text(ui.f_name, 0xffffff, x, y + sc(42), ui.name, 0, 1);
-    text(ui.f_hint, TEAL_LIGHT, x, y + sc(66),
-         ui.note ? ui.note : ui.no_password ? "Press Enter or click to unlock" : "Type your password", 0, 0);
+    const char *hint = ui.note ? ui.note : ui.no_password > 0 ? "Press Enter or click to unlock"
+                     : ui.no_password == 0 ? "Type your password" : NULL;
+    if (hint)
+        text(ui.f_hint, TEAL_LIGHT, x, y + sc(66), hint, 0, 0);
     char bullets[PASS_MAX * 3 + 1] = "";
     for (int k = 0; k < ui.passlen; k++)
         strcat(bullets, "\u2022");
@@ -422,6 +425,7 @@ int main(int argc, char **argv)
     while (e.type != MapNotify)
         XWindowEvent(ui.dpy, ui.win, StructureNotifyMask, &e);
 
+    ui.no_password = -1;
     ui.draw = XftDrawCreate(ui.dpy, ui.win, ui.vis, ui.cmap);
     ui.f_time = font("DejaVu Sans", 96);
     ui.f_date = font("DejaVu Sans", 22);
@@ -450,7 +454,7 @@ int main(int argc, char **argv)
                 redraw();
             else if (e.type == KeyPress)
                 key(&e.xkey);
-            else if (e.type == ButtonPress && ui.no_password)
+            else if (e.type == ButtonPress && ui.no_password > 0)
                 try_unlock();
             else if (e.type == VisibilityNotify && e.xvisibility.state != VisibilityUnobscured)
                 XRaiseWindow(ui.dpy, ui.win);

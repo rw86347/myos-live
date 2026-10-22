@@ -10,6 +10,8 @@ IMG is a UEFI image (make ARCH=x86_64 ... myos-uefi-login.img). SCRIPT has
 one command per line (# starts a comment):
 
   expect TEXT      wait (up to 4 minutes) until the serial log shows TEXT
+  next TEXT        the same, but only what the log said after the last
+                   expect or next matched (for a line that comes again)
   wait SECONDS
   key NAME         one key, QEMU's names (ret, tab, minus, a, ...)
   until TEXT | KEY press KEY every 3 s until the serial log shows TEXT (up
@@ -23,6 +25,11 @@ one command per line (# starts a comment):
                    is there (needs Pillow)
   click            the left button
   shot NAME        the screen to SHOT_DIR/NAME.png
+  lid              the lid shuts, or opens if it is shut: a CPU added in
+                   QEMU's monitor, which a SLEEPTEST=1 kernel takes for the
+                   lid (kernel/fakelid_test.c). QEMU_EXTRA needs
+                   tools/fakelid.py's table and -smp 1,maxcpus=4 (3 moves)
+  powerbtn         the power button (QEMU's system_powerdown)
 
 and, from inside the machine, over ssh:
 
@@ -259,15 +266,20 @@ def sshkey(user):
     sys.exit('qemu-desktop: ssh never let us in (as %s, port %d)' % (ssh_user, SSH))
 
 
+pos = 0                                 # where the last expect or next matched
+cpus = 0                                # CPUs added (the lid)
 try:
     for line in lines:
         op, _, arg = line.partition(' ')
-        if op == 'expect':
+        if op in ('expect', 'next'):
+            start = 0 if op == 'expect' else pos
             end = time.time() + 240
-            while arg.encode() not in seen and time.time() < end:
+            while seen.find(arg.encode(), start) < 0 and time.time() < end:
                 pump(0.5)
-            if arg.encode() not in seen:
+            at = seen.find(arg.encode(), start)
+            if at < 0:
                 sys.exit('qemu-desktop: never saw "%s"' % arg)
+            pos = at + len(arg.encode())
         elif op == 'wait':
             pump(float(arg))
         elif op == 'until':
@@ -303,6 +315,12 @@ try:
                 os.remove(ppm)
             except ImportError:
                 pass                    # (no Pillow: keep the .ppm)
+        elif op == 'lid':
+            cpus += 1
+            monitor('device_add qemu64-x86_64-cpu,id=lid%d,socket-id=0,core-id=%d,thread-id=0'
+                    % (cpus, cpus), 0.5)
+        elif op == 'powerbtn':
+            monitor('system_powerdown', 0.5)
         elif op == 'sshkey':
             sshkey(arg)
         elif op == 'sh':

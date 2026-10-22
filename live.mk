@@ -200,6 +200,24 @@ test-wifi-desktop: $(UEFI_LOGIN_IMG)
 	  || { echo "FAIL: not connected through the tray icon (see $(BUILD)/wifi-*.png)"; exit 1; }
 	@echo "WIFI DESKTOP OK: joined MyOS-Test from the tray icon (screenshots: $(BUILD)/wifi-*.png)"
 
+# Sleep on a whole desktop (docs/SLEEP-PLAN.md): the live disk on a kernel
+# whose lid (tools/fakelid.py's) moves when a CPU is added. The lid, the
+# Start menu's Sleep and the power button each put it to sleep behind the
+# lock screen, and it is unlocked after each wake, without and then with a
+# password (live/tools/sleep-desktop.qs); the screenshots land in $(BUILD).
+test-sleep-desktop: $(LIVE_UEFI)
+	@[ "$(SLEEPTEST)" = 1 ] && [ "$(ARCH)" = x86_64 ] \
+	  || { echo "test-sleep-desktop: make ARCH=x86_64 SLEEPTEST=1 test-sleep-desktop"; exit 1; }
+	python3 tools/fakelid.py $(BUILD)/fakelid.aml
+	QEMU_EXTRA='-acpitable file=$(BUILD)/fakelid.aml -smp 1,maxcpus=4' \
+	  python3 live/tools/qemu-desktop.py $(LIVE_UEFI) live/tools/sleep-desktop.qs \
+	  $(BUILD)/sleep-desktop-serial.log $(BUILD) $(OVMF_CODE) $(OVMF_VARS)
+	@L=$(BUILD)/sleep-desktop-serial.log; ok=1; \
+	  for w in "the lid" "a key" "the power button"; do \
+	    grep -q "sleep: woken by $$w" $$L || { echo "FAIL: not woken by $$w"; ok=0; }; done; \
+	  [ $$ok = 1 ] && echo "SLEEP DESKTOP OK: the lid, the Start menu and the power button" \
+	    "(screenshots: $(BUILD)/sleep-*.png)" || exit 1
+
 # --- the live disk's software (step 9c-3) ----------------------------------------
 # Every program on the live disk (live/packages.txt: IceWM desktop, logins,
 # AbiWord, gcc/make/python3/adb...), as pinned Alpine packages
