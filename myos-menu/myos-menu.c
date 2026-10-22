@@ -169,6 +169,7 @@ struct docked {
     Window w;                       /* the program's icon window */
     Window in;                      /* where it sits now: tray_win or panel_inner (0 not yet) */
     int x, y;
+    int iw, ih;                     /* its size: it may shrink itself after we size it */
     int rank;                       /* its order in the tray (rank_of) */
 };
 static struct docked docked[MAX_DOCK];     /* the Wi-Fi icon first, then as they came */
@@ -187,7 +188,6 @@ static void redraw_icons(void);
 static void lay_out_icons(void);
 static void undock(Window w);
 static void close_panel(void);
-static int tray_seam(void);
 static int panel_full(void);
 static time_t tray_minute;                 /* the minute currently drawn; 0 none */
 static struct rect run_box, run_ok, run_cancel, run_close;
@@ -834,16 +834,31 @@ static int tray_places(int *xs)
     return n;
 }
 
-/* The panel's grid: the tray's step between icons, its height per row. */
-static int panel_step(void)
-{
-    return vol_x > slot_x ? vol_x - slot_x : slot_size + 2 * slot_y;
-}
+/* The panel: a pane of frosted glass floating above the tray, one round
+   button per icon with its name under it, three to a row (the Mac's
+   Control Center). Its sizes are at 100%, in screen pixels, and grow
+   with the scale. */
+#define PX(n) ((n) * scale / 100)
+#define GLASS_PAD    PX(8)          /* the card's top, above the first row */
+#define GLASS_ROW    PX(54)         /* a button and its name */
+#define GLASS_PITCH  PX(64)         /* from one button to the next */
+#define GLASS_BTN    PX(15)         /* a button's radius */
+#define GLASS_RADIUS PX(14)         /* the card's corners */
+#define GLASS_GAP    PX(6)          /* between the card and the tray */
 
 static int panel_cols(void)
 {
-    int c = (tray_pic.w - slot_x) / panel_step();
+    int c = (tray_pic.w - 2 * GLASS_PAD) / GLASS_PITCH;
     return c < 1 ? 1 : c;
+}
+
+/* The middle of the k-th button, in the panel. */
+static void button_at(int k, int *cx, int *cy)
+{
+    int cols = panel_cols();
+    int left = (tray_pic.w - cols * GLASS_PITCH) / 2;
+    *cx = left + GLASS_PITCH / 2 + k % cols * GLASS_PITCH;
+    *cy = GLASS_PAD + GLASS_BTN + k / cols * GLASS_ROW;
 }
 
 /* The panel grows out of the tray: panel_win is the part that shows, its
@@ -864,7 +879,7 @@ static long now_ms(void)
    move with it (live/common/tray_follow.h). Only when it changed. */
 static void say_tray_top(int tray_y)
 {
-    long top = panel_h ? tray_y - panel_h + tray_seam() : tray_y;
+    long top = panel_h ? tray_y - panel_h : tray_y;
     if (top == tray_top_said)
         return;
     tray_top_said = top;
@@ -883,7 +898,7 @@ static void set_panel_height(int h)
         XUnmapWindow(dpy, panel_win);
         panel_h = 0;
     } else {
-        XMoveResizeWindow(dpy, panel_win, x, y - h + tray_seam(), (unsigned)tray_pic.w, (unsigned)h);
+        XMoveResizeWindow(dpy, panel_win, x, y - h, (unsigned)tray_pic.w, (unsigned)h);
         XMoveWindow(dpy, panel_inner, 0, h - panel_full());
         if (!panel_h)
             XMapRaised(dpy, panel_win);
@@ -919,90 +934,247 @@ static void animate_panel(int to, int ms)
     step_panel();
 }
 
-/* c moved toward white by n/256. */
-static uint32_t lighter(uint32_t c, int n)
-{
-    uint32_t r = c >> 16 & 0xff, g = c >> 8 & 0xff, b = c & 0xff;
-    r += (255 - r) * n / 256, g += (255 - g) * n / 256, b += (255 - b) * n / 256;
-    return r << 16 | g << 8 | b;
-}
-
-/* The tray picture's top rows are a light highlight line (1 px at 100%).
-   The grown panel covers them, so tray and panel read as one piece, and
-   puts the same line along its own top instead. */
-static int tray_seam(void)
-{
-    int s = tray_pic.h / 40;
-    return s < 1 ? 1 : s;
-}
-
-/* How tall the whole panel is: its rows, and the seam it covers. */
+/* How tall the whole panel is: the card with its rows, and the gap. */
 static int panel_full(void)
 {
-    return panel_rows * tray_pic.h + tray_seam();
+    return GLASS_PAD + panel_rows * GLASS_ROW + GLASS_GAP;
 }
 
-/* The panel's picture, `rows` high: the tray grown taller. Its colour is
-   the tray's own teal where it meets the tray (the column under the
-   clock, which is plain: the time is drawn at run time, just below the
-   highlight line), getting a little lighter toward the top; the divider
-   runs down the left as on the bar, and the highlight line closes the top. */
+/* The panel's windows, made with the first icon that goes in it. Its
+   picture is made each time it opens (make_glass). */
 static void size_panel(int rows)
 {
     if (rows == panel_rows && panel_win)
         return;
-    int seam = tray_seam();
-    int w = tray_pic.w, h = rows * tray_pic.h + seam;
-    uint32_t *px = malloc((size_t)w * h * 4);
-    if (!px)
-        die("out of memory");
-    int plain = clock_x > 0 && clock_x < tray_pic.w ? clock_x : tray_pic.w - 1;
-    const uint32_t *below = tray_pic.px + (size_t)(seam * 4) * tray_pic.w;
-    uint32_t base = below[plain] & 0xffffff;
-    uint32_t hi = tray_pic.px[plain] & 0xffffff, hi0 = tray_pic.px[0] & 0xffffff;
-    uint32_t edge = tray_pic.px[(size_t)(tray_pic.h / 2) * tray_pic.w] & 0xffffff;
-    for (int y = 0; y < h; y++) {
-        uint32_t *row = px + (size_t)y * w;
-        int top = y < seam;
-        uint32_t c = top ? hi : lighter(base, 40 * (h - y) / h);
-        row[0] = top ? hi0 : edge;
-        for (int x = 1; x < w; x++)
-            row[x] = c;
-    }
-    Pixmap pm = pixmap_from(px, w, h);
-    free(px);
+    if (panel_h)
+        close_panel();              /* an icon came or went while it was open */
+    panel_rows = rows;
+    int w = tray_pic.w, h = panel_full();
     if (!panel_win) {
         XSetWindowAttributes a = { .override_redirect = True, .background_pixmap = None,
-                                   .event_mask = EnterWindowMask | LeaveWindowMask | ButtonPressMask };
+                                   .event_mask = EnterWindowMask | LeaveWindowMask | ButtonPressMask |
+                                                 ButtonReleaseMask };
         panel_win = XCreateWindow(dpy, root, 0, 0, w, 1, 0, depth, InputOutput, vis,
                                   CWOverrideRedirect | CWBackPixmap | CWEventMask, &a);
-        a.background_pixmap = pm;
         panel_inner = XCreateWindow(dpy, panel_win, 0, 0, w, h, 0, depth, InputOutput, vis,
                                     CWBackPixmap, &a);
         XMapWindow(dpy, panel_inner);
     } else {
         XResizeWindow(dpy, panel_inner, w, h);
-        XSetWindowBackgroundPixmap(dpy, panel_inner, pm);
-        XClearWindow(dpy, panel_inner);
     }
+}
+
+/* --- the glass ---
+
+   X has no see-through windows without a compositor, so the glass is the
+   screen behind the panel, read once as it opens (XGetImage), blurred and
+   tinted teal. The corners and the gap above the tray keep that screen as
+   it was, so the card looks round and afloat. Cost: one read of the
+   panel's rectangle and three box-blur passes each way over the card,
+   each pass a running sum (constant work per pixel, whatever the radius). */
+
+static uint32_t mix(uint32_t under, uint32_t over, int a)    /* a: 0..256 */
+{
+    uint32_t r = ((under >> 16 & 0xff) * (256 - a) + (over >> 16 & 0xff) * a) >> 8;
+    uint32_t g = ((under >> 8 & 0xff) * (256 - a) + (over >> 8 & 0xff) * a) >> 8;
+    uint32_t b = ((under & 0xff) * (256 - a) + (over & 0xff) * a) >> 8;
+    return r << 16 | g << 8 | b;
+}
+
+/* One row or column, n pixels `stride` apart, averaged over 2r+1. */
+static void blur_line(uint32_t *p, int n, int stride, int r, uint32_t *tmp)
+{
+    for (int i = 0; i < n; i++)
+        tmp[i] = p[(size_t)i * stride];
+    int win = 2 * r + 1, sr = 0, sg = 0, sb = 0;
+    for (int i = -r; i <= r; i++) {
+        uint32_t c = tmp[i < 0 ? 0 : i >= n ? n - 1 : i];
+        sr += c >> 16 & 0xff, sg += c >> 8 & 0xff, sb += c & 0xff;
+    }
+    for (int i = 0; i < n; i++) {
+        p[(size_t)i * stride] = (uint32_t)(sr / win) << 16 | (uint32_t)(sg / win) << 8 |
+                                (uint32_t)(sb / win);
+        int out = i - r < 0 ? 0 : i - r, in = i + r + 1 >= n ? n - 1 : i + r + 1;
+        sr += (int)(tmp[in] >> 16 & 0xff) - (int)(tmp[out] >> 16 & 0xff);
+        sg += (int)(tmp[in] >> 8 & 0xff) - (int)(tmp[out] >> 8 & 0xff);
+        sb += (int)(tmp[in] & 0xff) - (int)(tmp[out] & 0xff);
+    }
+}
+
+/* Three box blurs each way: close to a Gaussian. */
+static void blur(uint32_t *px, int w, int h, int r)
+{
+    uint32_t *tmp = malloc((size_t)(w > h ? w : h) * 4);
+    if (!tmp)
+        return;
+    for (int pass = 0; pass < 3; pass++) {
+        for (int y = 0; y < h; y++)
+            blur_line(px + (size_t)y * w, w, 1, r, tmp);
+        for (int x = 0; x < w; x++)
+            blur_line(px + x, h, w, r, tmp);
+    }
+    free(tmp);
+}
+
+/* 1 if (x, y), in 1/4 pixels, is inside the rounded rectangle w x h
+   (pixels) with corners of radius r. */
+static int in_card(int x, int y, int w, int h, int r)
+{
+    int qx = x < 4 * r ? 4 * r - x : x > 4 * (w - r) ? x - 4 * (w - r) : 0;
+    int qy = y < 4 * r ? 4 * r - y : y > 4 * (h - r) ? y - 4 * (h - r) : 0;
+    return x >= 0 && y >= 0 && x < 4 * w && y < 4 * h && qx * qx + qy * qy <= 16 * r * r;
+}
+
+/* How much of pixel (x, y) a shape covers, 0..256, from sixteen samples.
+   Only pixels near an edge are sampled; the rest are in or out whole. */
+static int cover_card(int x, int y, int w, int h, int r)
+{
+    int n = 0;
+    for (int j = 0; j < 4; j++)
+        for (int i = 0; i < 4; i++)
+            n += in_card(4 * x + i, 4 * y + j, w, h, r);
+    return n * 16;
+}
+
+/* The circle of radius r around the point (cx, cy) between pixels. */
+static int cover_circle(int x, int y, int cx, int cy, int r)
+{
+    int dx = 2 * (x - cx) + 1, dy = 2 * (y - cy) + 1, d2 = dx * dx + dy * dy;   /* in 1/2 px */
+    if (d2 > 4 * (r + 1) * (r + 1))
+        return 0;
+    if (r > 1 && d2 < 4 * (r - 1) * (r - 1))
+        return 256;
+    int n = 0;
+    for (int j = 0; j < 4; j++)
+        for (int i = 0; i < 4; i++) {
+            int ex = 8 * (x - cx) + 2 * i + 1, ey = 8 * (y - cy) + 2 * j + 1;   /* in 1/8 px */
+            n += ex * ex + ey * ey <= 64 * r * r;
+        }
+    return n * 16;
+}
+
+/* An icon's name under its button. */
+static void icon_name(Window w, char *out, size_t n)
+{
+    XClassHint ch = { 0 };
+    char *name = NULL;
+    out[0] = 0;
+    if (XGetClassHint(dpy, w, &ch) && ch.res_name) {
+        if (!strcmp(ch.res_name, "myos-wifi"))
+            snprintf(out, n, "Wi-Fi");
+        else if (!strncmp(ch.res_name, "ibus", 4))
+            snprintf(out, n, "Keyboard");
+        else if (XFetchName(dpy, w, &name) && name && name[0])
+            snprintf(out, n, "%s", name);
+        else if (ch.res_class)
+            snprintf(out, n, "%s", ch.res_class);
+    }
+    if (name)
+        XFree(name);
+    if (ch.res_name)
+        XFree(ch.res_name);
+    if (ch.res_class)
+        XFree(ch.res_class);
+}
+
+static XftFont *f_glass;            /* the names under the buttons */
+
+/* The panel's picture for its place now, (x, top) on the screen: made
+   while it is closed, so the screen read is what's behind it. */
+static void make_glass(int x, int top)
+{
+    int w = tray_pic.w, h = panel_full(), card_h = h - GLASS_GAP;
+    uint32_t *px = grab(root, x, top, w, h);
+    uint32_t *glass = malloc((size_t)w * card_h * 4);
+    if (!glass) {
+        free(px);
+        return;
+    }
+    memcpy(glass, px, (size_t)w * card_h * 4);
+    blur(glass, w, card_h, PX(6));
+    int xs[3], first = tray_places(xs), nbtn = ndocked - first;
+    int r = GLASS_RADIUS, edge = PX(1) < 1 ? 1 : PX(1);
+    for (int y = 0; y < card_h; y++)
+        for (int i = 0; i < w; i++) {
+            /* Inside, away from the edge: no sampling needed. */
+            int deep = i >= r + edge && i < w - r - edge && y >= edge && y < card_h - edge;
+            int a = deep ? 256 : cover_card(i, y, w, card_h, r);
+            if (!a)
+                continue;
+            uint32_t c = mix(glass[(size_t)y * w + i], 0x143c40, 170);   /* the tint */
+            if (!deep) {            /* a light line along the edge */
+                int inner = cover_card(i - edge, y - edge, w - 2 * edge, card_h - 2 * edge,
+                                       r - edge > 0 ? r - edge : 0);
+                c = mix(c, 0xffffff, (a - inner) * 60 / 256);
+            }
+            for (int k = 0; k < nbtn; k++) {
+                int cx, cy;
+                button_at(k, &cx, &cy);
+                int b = cover_circle(i, y, cx, cy, GLASS_BTN);
+                if (b)
+                    c = mix(c, 0xffffff, b * 45 / 256);
+            }
+            px[(size_t)y * w + i] = mix(px[(size_t)y * w + i], c, a);
+        }
+    free(glass);
+    Pixmap pm = pixmap_from(px, w, h);
+    free(px);
+    for (int k = 0; k < nbtn && f_glass; k++) {
+        char name[48];
+        int cx, cy;
+        icon_name(docked[first + k].w, name, sizeof name);
+        button_at(k, &cx, &cy);
+        text(pm, f_glass, 0xe6f0f0, 255, cx - text_width(f_glass, name) / 2,
+             cy + GLASS_BTN + f_glass->ascent + PX(4), name);
+    }
+    XSetWindowBackgroundPixmap(dpy, panel_inner, pm);
+    XClearWindow(dpy, panel_inner);
+    redraw_icons();
     if (panel_bg)
         XFreePixmap(dpy, panel_bg);
     panel_bg = pm;
-    panel_rows = rows;
-    if (panel_h) {                  /* open, and an icon came or went: the new height at once */
-        panel_h = 0;
-        anim_ms = 0;
-        set_panel_height(panel_full());
+}
+
+/* libXtst, declared here: it has no headers in the sysroot. */
+int XTestFakeButtonEvent(Display *, unsigned int button, Bool is_press, unsigned long delay);
+
+/* A click on a button, anywhere on its circle, is the icon's click. GTK
+   reads the mouse through XInput2 and ignores sent core events, so the
+   click is made again over the icon with XTest, the pointer taken there
+   and back. Done when the button comes up: while it is down, X gives
+   every click to the panel. */
+static void panel_click(XButtonEvent *e)
+{
+    int xs[3], first = tray_places(xs);
+    int y = e->y - (panel_h - panel_full());
+    for (int k = 0; first + k < ndocked; k++) {
+        int cx, cy;
+        button_at(k, &cx, &cy);
+        int dx = e->x - cx, dy = y - cy;
+        if (dx * dx + dy * dy > GLASS_BTN * GLASS_BTN)
+            continue;
+        struct docked *d = &docked[first + k];
+        XWarpPointer(dpy, None, d->w, 0, 0, 0, 0, d->iw / 2, d->ih / 2);
+        XTestFakeButtonEvent(dpy, e->button, True, 0);
+        XTestFakeButtonEvent(dpy, e->button, False, 0);
+        XWarpPointer(dpy, None, root, 0, 0, 0, 0, e->x_root, e->y_root);
+        XFlush(dpy);
+        return;
     }
 }
 
 /* Hand an icon to the tray or the panel, at (x, y) there. */
 static void embed(struct docked *d, Window in, int x, int y)
 {
-    if (d->in == in && d->x == x && d->y == y)
+    if (d->in == in) {
+        if (d->x != x || d->y != y)
+            XMoveWindow(dpy, d->w, x, y);
+        d->x = x, d->y = y;
         return;
+    }
     XReparentWindow(dpy, d->w, in, x, y);
     XResizeWindow(dpy, d->w, (unsigned)slot_size, (unsigned)slot_size);
+    d->iw = d->ih = slot_size;
     XClientMessageEvent m = { .type = ClientMessage, .window = d->w, .format = 32,
                               .message_type = a_xembed };
     m.data.l[0] = CurrentTime;
@@ -1013,8 +1185,9 @@ static void embed(struct docked *d, Window in, int x, int y)
     d->in = in, d->x = x, d->y = y;
 }
 
-/* Every icon to its place: the tray's places first, the rest in the panel,
-   its bottom row nearest the tray. Icons already in place aren't touched. */
+/* Every icon to its place: the tray's places first, the rest on the
+   panel's buttons, left to right from the top. Icons already in place
+   aren't touched. */
 static void lay_out_icons(void)
 {
     if (!tray_win)
@@ -1033,9 +1206,11 @@ static void lay_out_icons(void)
             embed(&docked[i], tray_win, xs[i], slot_y);
             continue;
         }
-        int k = i - nplaces;
-        embed(&docked[i], panel_inner, slot_x + k % cols * panel_step(),
-              (rows - 1 - k / cols) * tray_pic.h + slot_y);
+        int cx, cy;
+        button_at(i - nplaces, &cx, &cy);
+        int iw = docked[i].in == panel_inner ? docked[i].iw : slot_size;
+        int ih = docked[i].in == panel_inner ? docked[i].ih : slot_size;
+        embed(&docked[i], panel_inner, cx - iw / 2, cy - ih / 2);
     }
 }
 
@@ -1056,6 +1231,12 @@ static void show_panel(void)
     int xs[3];
     if (!panel_win || ndocked <= tray_places(xs))
         return;
+    if (!panel_h && !anim_ms) {
+        Window child;
+        int x, y;
+        XTranslateCoordinates(dpy, tray_win, root, 0, 0, &x, &y, &child);
+        make_glass(x, y - panel_full());
+    }
     animate_panel(panel_full(), GROW_MS);
 }
 
@@ -1818,6 +1999,8 @@ int main(int argc, char **argv)
         snprintf(spec, sizeof spec, "Verdana,DejaVu Sans:pixelsize=%d", clock_size);
         f_clock = XftFontOpenName(dpy, screen, spec);
     }
+    snprintf(spec, sizeof spec, "Verdana,DejaVu Sans:pixelsize=%d", PX(10));
+    f_glass = XftFontOpenName(dpy, screen, spec);
     if (!f_name || !f_type)
         die("no fonts");
 
@@ -1867,8 +2050,19 @@ int main(int argc, char **argv)
             else if (ev.xbutton.window == tray_win && !battery_click(&ev.xbutton) && vol_size)
                 speaker_click(&ev.xbutton);
             break;
-        case MapNotify:
+        case ButtonRelease:
+            if (panel_win && ev.xbutton.window == panel_win)
+                panel_click(&ev.xbutton);
+            break;
         case ConfigureNotify:
+            for (int i = 0; i < ndocked; i++)
+                if (docked[i].w == ev.xconfigure.window &&
+                    (docked[i].iw != ev.xconfigure.width || docked[i].ih != ev.xconfigure.height)) {
+                    docked[i].iw = ev.xconfigure.width, docked[i].ih = ev.xconfigure.height;
+                    lay_out_icons();    /* centred on its button again */
+                }
+            /* fall through */
+        case MapNotify:
         case ReparentNotify:
             /* IceWM moves or restacks the bar; stay on it. */
             if (tray_win && tray_frame && (ev.xany.window == tray_frame || ev.xany.window == bar_window))

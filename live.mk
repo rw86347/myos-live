@@ -276,7 +276,7 @@ $(MENU_BIN): live/myos-menu/myos-menu.c live/myos-menu/programs.c live/myos-menu
 	  -Wl,-rpath-link,$(LIVE_SYSROOT)/usr/lib:$(LIVE_SYSROOT)/lib \
 	  $(LIVE_SYSROOT)/usr/lib/crt1.o $(LIVE_SYSROOT)/usr/lib/crti.o \
 	  $(BUILD)/live/myos-menu.o $(BUILD)/live/programs.o -L$(LIVE_SYSROOT)/usr/lib -L$(LIVE_SYSROOT)/lib \
-	  -lX11 -lXft -lImlib2 -l:libXfixes.so.3 -l:libXi.so.6 -lc -lgcc $(LIVE_SYSROOT)/usr/lib/crtn.o -o $@
+	  -lX11 -lXft -lImlib2 -l:libXfixes.so.3 -l:libXi.so.6 -l:libXtst.so.6 -lc -lgcc $(LIVE_SYSROOT)/usr/lib/crtn.o -o $@
 
 # Settings (live/myos-settings): a GTK3 program, and myos-xsettings, which
 # applies the desktop's scale. GTK's headers come from packages.txt's
