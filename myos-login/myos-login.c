@@ -64,7 +64,8 @@
 #define WAYLAND_WM      "/usr/bin/myos-wm"
 #define SEATD           "/usr/bin/seatd"
 #define CHOICE_DIR      "/var/lib/myos-login"
-#define CHOICE_FILE     CHOICE_DIR "/session"   /* "wayland" or "x11": the last one used */
+#define CHOICE_FILE     CHOICE_DIR "/session"   /* "wayland" for the Wayland preview, by hand */
+#define LIVE_MARK       "/usr/bin/myos-install"
 #define XSERVER "/usr/bin/X"
 #define XAUTH_DIR  "/run/myos-login"        /* root's alone (0700) */
 #define XAUTH_FILE XAUTH_DIR "/X0.auth"     /* the server's copy of the cookie */
@@ -452,10 +453,14 @@ static void build_still(void)
     text(ui.still, ui.f_small, TEAL_LIGHT, 255, ui.w / 2 - sc(41), sc(446),
          "To begin, click your user name", 1);
     text_shadow(ui.still, ui.f_small, 0xffffff, sc(76), ui.h - sc(34), "Turn off MyOS", 0);
-    text(ui.still, ui.f_sub, TEAL_LIGHT, 255, ui.w - sc(32), ui.h - sc(44),
-         "After you log on, you can add or change users.", 1);
-    text(ui.still, ui.f_sub, TEAL_LIGHT, 255, ui.w - sc(32), ui.h - sc(26),
-         "Go to Settings and click Users.", 1);
+    /* The live disk's user has no password. The installer is only on the
+       live disk: it removes itself from the system it installs. */
+    if (access(LIVE_MARK, X_OK) == 0) {
+        static const char note[] = "No password is needed on the Live Disk: just press Enter";
+        XGlyphInfo ext;
+        XftTextExtentsUtf8(ui.dpy, ui.f_small, (const FcChar8 *)note, strlen(note), &ext);
+        text_shadow(ui.still, ui.f_small, 0xffffff, ui.w / 2 - ext.xOff / 2, ui.h - sc(34), note, 0);
+    }
 }
 
 /* Each user's tile as it looks when chosen: the photograph underneath, a
@@ -533,22 +538,6 @@ static void draw_users(void)
     }
 }
 
-/* The desktop chooser, in the middle of the bottom band. */
-static void draw_session(void)
-{
-    if (!ui.has_wayland)
-        return;
-    int x = ui.w / 2 - sc(170), y = ui.h - sc(56);
-    XCopyArea(ui.dpy, ui.still, ui.win, DefaultGC(ui.dpy, ui.screen), x, y, sc(340), sc(40), x, y);
-    const char *name = ui.wayland ? "Desktop: MyOS (Wayland, preview)" : "Desktop: MyOS Classic (X11)";
-    XGlyphInfo ext;
-    XftTextExtentsUtf8(ui.dpy, ui.f_small, (const FcChar8 *)name, strlen(name), &ext);
-    text_shadow(ui.win, ui.f_small, 0xffffff, ui.w / 2 - ext.xOff / 2, ui.h - sc(34), name, 0);
-    static const char hint[] = "click to change";
-    XftTextExtentsUtf8(ui.dpy, ui.f_sub, (const FcChar8 *)hint, strlen(hint), &ext);
-    text(ui.win, ui.f_sub, TEAL_LIGHT, 217, ui.w / 2 - ext.xOff / 2, ui.h - sc(18), hint, 0);
-}
-
 static void read_choice(void)
 {
     ui.has_wayland = access(WAYLAND_SESSION, R_OK) == 0 && access(WAYLAND_WM, X_OK) == 0 &&
@@ -563,16 +552,6 @@ static void read_choice(void)
     ui.wayland = ui.has_wayland && strncmp(buf, "wayland", 7) == 0;
 }
 
-static void save_choice(void)
-{
-    mkdir(CHOICE_DIR, 0755);
-    FILE *f = fopen(CHOICE_FILE, "w");
-    if (f) {
-        fputs(ui.wayland ? "wayland\n" : "x11\n", f);
-        fclose(f);
-    }
-}
-
 /* Forget what was typed, and any message about the last attempt. */
 static void reset_entry(void)
 {
@@ -585,7 +564,6 @@ static void redraw(void)
 {
     XCopyArea(ui.dpy, ui.still, ui.win, DefaultGC(ui.dpy, ui.screen), 0, 0, ui.w, ui.h, 0, 0);
     draw_users();
-    draw_session();
     XFlush(ui.dpy);
 }
 
@@ -897,8 +875,10 @@ static void start_x(void)
     if (xpid < 0)
         die("fork");
     if (xpid == 0) {
+        /* -nocursor: no pointer until a window asks for one, so the big X
+           cursor doesn't show before our window is up. */
         execl(XSERVER, "X", ":0", "vt7", "-auth", XAUTH_FILE, "-nolisten", "tcp", "-nolock",
-              "-logfile", "/var/log/Xorg.0.log", (char *)NULL);
+              "-nocursor", "-logfile", "/var/log/Xorg.0.log", (char *)NULL);
         _exit(127);
     }
     setenv("DISPLAY", ":0", 1);
@@ -945,7 +925,11 @@ static void open_window(void)
     ui.win = XCreateWindow(ui.dpy, RootWindow(ui.dpy, ui.screen), 0, 0, ui.w, ui.h, 0,
                            CopyFromParent, InputOutput, ui.visual,
                            CWOverrideRedirect | CWBackPixel | CWEventMask, &at);
-    XDefineCursor(ui.dpy, ui.win, XCreateFontCursor(ui.dpy, XC_left_ptr));
+    Cursor arrow = XCreateFontCursor(ui.dpy, XC_left_ptr);
+    XDefineCursor(ui.dpy, ui.win, arrow);
+    /* And on the bare screen, seen after a login until the window manager
+       sets its own: X's default there is a big X. */
+    XDefineCursor(ui.dpy, RootWindow(ui.dpy, ui.screen), arrow);
     XStoreName(ui.dpy, ui.win, "MyOS login");
     XMapRaised(ui.dpy, ui.win);
 
@@ -954,15 +938,11 @@ static void open_window(void)
     imlib_context_set_anti_alias(1);
 }
 
-/* Which user tile is at this point, or -1; -2 for "Turn off MyOS", -3 for
-   the desktop chooser. */
+/* Which user tile is at this point, or -1; -2 for "Turn off MyOS". */
 static int hit(int x, int y)
 {
     if (y > ui.h - sc(80) && x < sc(240))
         return -2;
-    if (ui.has_wayland && y > ui.h - sc(56) && y < ui.h - sc(16) &&
-        x > ui.w / 2 - sc(170) && x < ui.w / 2 + sc(170))
-        return -3;
     for (int i = 0; i < ui.nusers; i++)
         if (x >= tile_x() && x < tile_x() + ui.tile_w &&
             y >= tile_y(i) && y < tile_y(i) + ui.tile_h)
@@ -1014,11 +994,6 @@ static void event_loop(void)
             int n = hit(ev.xbutton.x, ev.xbutton.y);
             if (n == -2) {
                 power_off();
-            } else if (n == -3) {
-                ui.wayland = !ui.wayland;
-                save_choice();
-                draw_session();
-                XFlush(ui.dpy);
             } else if (n >= 0 && n != ui.selected) {
                 ui.selected = n;
                 reset_entry();

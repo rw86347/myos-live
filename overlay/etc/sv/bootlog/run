@@ -1,0 +1,31 @@
+#!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
+# bootlog: keeps each boot's kernel log on the disk, so it can be read on
+# another computer with nothing typed here (tools/stick-logs.sh on the Mac
+# reads the stick's ext2). Boot N goes to /var/log/boot/N.txt; the newest
+# 20 are kept. Rewritten every 10 s for the first 5 minutes (drivers
+# starting, Wi-Fi joining), then every minute, with a sync after each:
+# holding the power button loses at most that much. On a machine that
+# fell back to the RAM image, /var is in RAM and the log is lost.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+dir=/var/log/boot
+mkdir -p $dir
+n=0
+[ -f $dir/last ] && read -r n < $dir/last
+n=$((n + 1))
+echo $n > $dir/last
+rm -f $dir/$((n - 20)).txt
+out=$dir/$n.txt
+while :; do
+    read -r up rest < /proc/uptime
+    {
+        echo "== boot $n, up $up s"
+        dmesg
+        echo "== /proc/net/wireless"
+        cat /proc/net/wireless
+    } > $out.tmp 2>&1
+    mv $out.tmp $out
+    sync
+    if [ "${up%%.*}" -lt 300 ]; then sleep 10; else sleep 60; fi
+done

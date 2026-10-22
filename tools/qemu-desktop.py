@@ -57,6 +57,9 @@ nearly always: QEMU sometimes hands two over at once and X speeds that up,
 so `moveto` checks the result on the screen. `xdo` doesn't go through the
 mouse at all: X's test extension puts the pointer where it is told.
 
+QEMU_EXTRA in the environment is added to QEMU's options (say,
+QEMU_EXTRA='-acpitable file=build/fakebat.aml' for a laptop's battery).
+
 The disk is opened with snapshot=on: nothing a run does is written to IMG
 (so the ssh key never stays on a disk that might be copied to a stick).
 A script that uses sshkey, sh, xdo or get gets a network card (e1000, QEMU's
@@ -93,7 +96,8 @@ q = subprocess.Popen(['qemu-system-x86_64', '-machine', 'q35,pit=off', '-m', '4G
                       '-drive', 'if=none,format=raw,file=' + img + ',id=bootdisk,snapshot=on',
                       '-device', 'ide-hd,drive=bootdisk,bootindex=0'] + net + ['-no-reboot',
                       '-display', 'none', '-serial', 'tcp:127.0.0.1:%d,server=on,wait=on' % SER,
-                      '-monitor', 'tcp:127.0.0.1:%d,server=on,wait=off' % MON],
+                      '-monitor', 'tcp:127.0.0.1:%d,server=on,wait=off' % MON] +
+                     shlex.split(os.environ.get('QEMU_EXTRA', '')),
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 time.sleep(1)
 ser = socket.create_connection(('127.0.0.1', SER))

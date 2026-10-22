@@ -1,7 +1,7 @@
 # packages.lock — written by live/tools/fetch-live.py --update; do not edit.
 # Every package on the live disk, in install order, with the SHA-256 of
 # its .apk. The build refuses any download that doesn't match.
-world e59da19a1fd4b86f71ad89e94d07fab046b756d25dbd4a7a840d0ae4932a8eed
+world 4d171ad9ea344b2291cf86f7b50bda9de67ec05b9f78cbf16f3d4b47fed8ae2d
 # group      package                          version              repo       sha256
 base         alpine-baselayout-data           3.6.5-r0             main       bbe2d06925bd6e6d8f540f601777f8123e50ea4b25727d2fcb5df5776eddf591
 base         musl                             1.2.5-r3             main       7e56fb578429d6c493c3cc07a7390635a5d76dcc6e38c74fbec9279b2d68ab63

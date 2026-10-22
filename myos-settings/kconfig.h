@@ -34,7 +34,7 @@ enum { KF_NO, KF_YES, KF_SOME, KF_MACHINE, KF_SMP };
 struct kfeature {
     int bit;
     const char *key, *label, *group, *what;
-    unsigned char support[3];       /* per family: KF_* */
+    unsigned char support[4];       /* per family: KF_* (kconfig.c checks the count) */
     int wake_us, slows_cpu, saves;
 };
 

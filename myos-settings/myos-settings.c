@@ -791,12 +791,25 @@ static void page_datetime(GtkWidget *page)
 }
 
 /* --- Displays -----------------------------------------------------------------------------
-   Five pictures of the same desktop, each drawn the way it would look:
-   bigger text on the left, more room on the right. */
-static const int sizes[] = {200, 175, 150, 125, 100};
-static GtkWidget *looks_like;
+   A slider from Larger Text to More Space, in steps of 25%, and a picture
+   of the desktop at the size it points to, drawn the way it would look.
+   The size changes when the slider is let go (each change restarts IceWM). */
+static GtkWidget *looks_like, *preview;
+static int preview_pct;
+static guint scale_timer;
 
 static void set_scale(int pct);
+
+/* The biggest size that still leaves 800 x 500 to work in (300% on the P2
+   Max's 2560 x 1600). */
+static int largest_scale(void)
+{
+    int best = SCALE_MIN;
+    for (int pct = SCALE_MIN; pct <= SCALE_MAX; pct += SCALE_STEP)
+        if (screen_w * 100 / pct >= 800 && screen_h * 100 / pct >= 500)
+            best = pct;
+    return best > effective() ? best : effective();
+}
 
 static gboolean draw_thumb(GtkWidget *w, cairo_t *cr, gpointer data)
 {
@@ -850,10 +863,53 @@ static gboolean draw_thumb(GtkWidget *w, cairo_t *cr, gpointer data)
     return TRUE;
 }
 
-static void thumb_clicked(GtkButton *b, gpointer data)
+static gboolean draw_preview(GtkWidget *w, cairo_t *cr, gpointer data)
 {
-    (void)b;
-    set_scale(GPOINTER_TO_INT(data));
+    (void)data;
+    return draw_thumb(w, cr, GINT_TO_POINTER(preview_pct));
+}
+
+static void show_looks_like(int pct)
+{
+    char *t = g_strdup_printf("%d%% \u2014 looks like %d \u00d7 %d%s", pct, screen_w * 100 / pct,
+                              screen_h * 100 / pct, pct == auto_pct ? " (default)" : "");
+    gtk_label_set_text(GTK_LABEL(looks_like), t);
+    g_free(t);
+}
+
+/* Apply once the slider is let go: while a button is held, look again later. */
+static gboolean scale_apply(gpointer u)
+{
+    (void)u;
+    GdkModifierType m = 0;
+    GdkDevice *ptr = gdk_seat_get_pointer(gdk_display_get_default_seat(gdk_display_get_default()));
+    gdk_device_get_state(ptr, gdk_get_default_root_window(), NULL, &m);
+    if (m & GDK_BUTTON1_MASK)
+        return G_SOURCE_CONTINUE;
+    scale_timer = 0;
+    set_scale(preview_pct);
+    return G_SOURCE_REMOVE;
+}
+
+/* The knob snaps to the 25% steps. */
+static gboolean scale_snap(GtkRange *r, GtkScrollType how, gdouble v, gpointer u)
+{
+    (void)how;
+    (void)u;
+    int pct = ((int)(v + SCALE_STEP / 2.0) / SCALE_STEP) * SCALE_STEP;
+    gtk_range_set_value(r, pct);
+    return TRUE;
+}
+
+static void scale_moved(GtkRange *r, gpointer u)
+{
+    (void)u;
+    preview_pct = (int)(gtk_range_get_value(r) + 0.5);
+    show_looks_like(preview_pct);
+    gtk_widget_queue_draw(preview);
+    if (scale_timer)
+        g_source_remove(scale_timer);
+    scale_timer = g_timeout_add(600, scale_apply, NULL);
 }
 
 static void page_displays(GtkWidget *page)
@@ -879,44 +935,41 @@ static void page_displays(GtkWidget *page)
     g_free(s);
     gtk_box_pack_start(GTK_BOX(page), v, FALSE, FALSE, S(6));
 
-    /* The sizes. Only those that leave at least 800 x 600 to work in. */
+    /* The picture at the slider's size, then the slider: larger text on
+       the left, as on the Mac. */
     GtkWidget *g = group_new(page, NULL);
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(10));
-    GtkWidget *top = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(10));
-    gtk_box_pack_start(GTK_BOX(top), label_new("Text and window size", NULL, 0), TRUE, TRUE, 0);
-    gtk_box_pack_start(GTK_BOX(box), top, FALSE, FALSE, 0);
-    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(12));
-    gtk_widget_set_halign(row, GTK_ALIGN_CENTER);
-    int shown = 0, n = sizeof sizes / sizeof sizes[0];
-    for (int j = 0; j < n; j++) {
-        int pct = sizes[j];
-        if (pct != 100 && (screen_w * 100 / pct < 800 || screen_h * 100 / pct < 600))
-            continue;
-        GtkWidget *col = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(4));
-        GtkWidget *b = gtk_button_new();
-        gtk_style_context_add_class(gtk_widget_get_style_context(b), "thumb");
-        GtkWidget *d = gtk_drawing_area_new();
-        gtk_widget_set_size_request(d, S(88), S(56));
-        g_signal_connect(d, "draw", G_CALLBACK(draw_thumb), GINT_TO_POINTER(pct));
-        gtk_container_add(GTK_CONTAINER(b), d);
-        g_signal_connect(b, "clicked", G_CALLBACK(thumb_clicked), GINT_TO_POINTER(pct));
-        char *tip = g_strdup_printf("%d%%: looks like %d \u00d7 %d", pct, screen_w * 100 / pct, screen_h * 100 / pct);
-        gtk_widget_set_tooltip_text(b, tip);
-        g_free(tip);
-        gtk_box_pack_start(GTK_BOX(col), b, FALSE, FALSE, 0);
-        const char *what = pct == auto_pct ? "Default" : shown == 0 ? "Larger Text" : pct == 100 ? "More Space" : "";
-        GtkWidget *l = label_new(what, "thumb-label", .5);
-        if (pct == effective())
-            gtk_style_context_add_class(gtk_widget_get_style_context(l), "selected");
-        gtk_box_pack_start(GTK_BOX(col), l, FALSE, FALSE, 0);
-        gtk_box_pack_start(GTK_BOX(row), col, FALSE, FALSE, 0);
-        shown++;
+    gtk_box_pack_start(GTK_BOX(box), label_new("Text and window size", NULL, 0), FALSE, FALSE, 0);
+    preview_pct = effective();
+    preview = gtk_drawing_area_new();
+    gtk_widget_set_size_request(preview, S(176), S(112));
+    gtk_widget_set_halign(preview, GTK_ALIGN_CENTER);
+    g_signal_connect(preview, "draw", G_CALLBACK(draw_preview), NULL);
+    gtk_box_pack_start(GTK_BOX(box), preview, FALSE, FALSE, 0);
+    int top = largest_scale();
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(10));
+    if (top <= SCALE_MIN) {                 /* (a slider needs two ends) */
+        gtk_box_pack_start(GTK_BOX(row), label_new("This screen is too small to make things bigger: "
+                                                   "800 \u00d7 500 is the least left to work in.",
+                                                   "footnote", .5), TRUE, TRUE, 0);
+    } else {
+        GtkWidget *sl = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, SCALE_MIN, top, SCALE_STEP);
+        gtk_range_set_inverted(GTK_RANGE(sl), TRUE);
+        gtk_range_set_increments(GTK_RANGE(sl), SCALE_STEP, SCALE_STEP);
+        gtk_scale_set_draw_value(GTK_SCALE(sl), FALSE);
+        for (int pct = SCALE_MIN; pct <= top; pct += SCALE_STEP)
+            gtk_scale_add_mark(GTK_SCALE(sl), pct, GTK_POS_BOTTOM, pct == auto_pct ? "Default" : NULL);
+        gtk_range_set_value(GTK_RANGE(sl), preview_pct);
+        gtk_widget_set_size_request(sl, S(300), -1);
+        g_signal_connect(sl, "change-value", G_CALLBACK(scale_snap), NULL);
+        g_signal_connect(sl, "value-changed", G_CALLBACK(scale_moved), NULL);
+        gtk_box_pack_start(GTK_BOX(row), label_new("Larger Text", "footnote", 1), FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(row), sl, TRUE, TRUE, 0);
+        gtk_box_pack_start(GTK_BOX(row), label_new("More Space", "footnote", 0), FALSE, FALSE, 0);
     }
     gtk_box_pack_start(GTK_BOX(box), row, FALSE, FALSE, 0);
-    s = g_strdup_printf("%d%% \u2014 looks like %d \u00d7 %d", effective(), screen_w * 100 / effective(),
-                        screen_h * 100 / effective());
-    looks_like = label_new(s, "value", .5);
-    g_free(s);
+    looks_like = label_new("", "value", .5);
+    show_looks_like(preview_pct);
     gtk_box_pack_start(GTK_BOX(box), looks_like, FALSE, FALSE, 0);
     row_add(g, box);
 
@@ -938,19 +991,93 @@ static void page_displays(GtkWidget *page)
 }
 
 /* --- Mouse & Keyboard ----------------------------------------------------------------------
-   The pointer's size, as four pictures of the arrow, and the keys that
-   work everywhere. The size goes to myos-xsettings like the scale does. */
+   The pointer's size, as four pictures of the arrow, its speed and
+   acceleration (one slider each), and the keys that work everywhere. All
+   go to myos-xsettings like the scale does (scale.h). */
 static const int pointer_sizes[] = {100, 150, 200, 300};
 static const char *const pointer_names[] = {"Normal", "Large", "Larger", "Largest"};
 static int pointer = POINTER_MIN;
-static Atom a_pointer;
+static int mouse_speed = SPEED_NORMAL, mouse_acc = ACCEL_NORMAL;
+static Atom a_pointer, a_mouse;
 
 static void read_pointer(void)
 {
     Display *d = gdk_x11_get_default_xdisplay();
+    struct mouse_conf mc = mouse_read_conf();
     a_pointer = XInternAtom(d, "_MYOS_POINTER", False);
+    a_mouse = XInternAtom(d, "_MYOS_MOUSE", False);
     long v = root_cardinal(d, a_pointer, -1);
-    pointer = v < 0 ? pointer_read_conf() : clamp_pointer(v);
+    pointer = v < 0 ? mc.pointer : clamp_pointer(v);
+    mouse_speed = mc.speed;
+    mouse_acc = mc.accel;
+}
+
+/* A slider moved: keep it, and tell myos-xsettings, which applies it at once. */
+static void mouse_slider_changed(GtkRange *r, gpointer which)
+{
+    int v = (int)(gtk_range_get_value(r) + 0.5);
+    if (GPOINTER_TO_INT(which))
+        mouse_acc = clamp_to(v, ACCEL_MIN, ACCEL_MAX);
+    else
+        mouse_speed = clamp_to(v, SPEED_MIN, SPEED_MAX);
+    struct mouse_conf mc = mouse_read_conf();
+    mc.pointer = pointer, mc.speed = mouse_speed, mc.accel = mouse_acc;
+    if (mouse_write_conf(mc) < 0)
+        g_warning("can't write ~/.config/myos/mouse.conf");
+    Display *d = gdk_x11_get_default_xdisplay();
+    long p = mouse_speed * 16 + mouse_acc;
+    XChangeProperty(d, DefaultRootWindow(d), a_mouse, XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&p, 1);
+    XFlush(d);
+}
+
+/* "Scroll with two fingers": kept in mouse.conf, and the kernel told at
+   once (myos-xsettings tells it again at each login). */
+static void scroll_toggled(GObject *sw, GParamSpec *ps, gpointer unused)
+{
+    (void)ps, (void)unused;
+    struct mouse_conf mc = mouse_read_conf();
+    mc.scroll = gtk_switch_get_active(GTK_SWITCH(sw));
+    if (mouse_write_conf(mc) < 0)
+        g_warning("can't write ~/.config/myos/mouse.conf");
+    touchpad_apply(mc.scroll);
+}
+
+static GtkWidget *scroll_row(void)
+{
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(12));
+    GtkWidget *text = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(2));
+    gtk_box_pack_start(GTK_BOX(text), label_new("Scroll with two fingers", NULL, 0), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(text), label_new("On a touchpad, the page follows two fingers. "
+                                                "Off: two fingers move the pointer.",
+                                                "footnote", 0), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(row), text, TRUE, TRUE, 0);
+    GtkWidget *sw = gtk_switch_new();
+    gtk_switch_set_active(GTK_SWITCH(sw), mouse_read_conf().scroll);
+    gtk_widget_set_valign(sw, GTK_ALIGN_CENTER);
+    g_signal_connect(sw, "notify::active", G_CALLBACK(scroll_toggled), NULL);
+    gtk_box_pack_end(GTK_BOX(row), sw, FALSE, FALSE, 0);
+    return row;
+}
+
+/* "Speed  Slow ---o--- Fast": a slider in whole steps, its ends named. */
+static GtkWidget *mouse_slider(const char *title, int lo, int hi, int value, const char *left,
+                               const char *right, int which)
+{
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(4));
+    gtk_box_pack_start(GTK_BOX(box), label_new(title, NULL, 0), FALSE, FALSE, 0);
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(10));
+    GtkWidget *s = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, lo, hi, 1);
+    gtk_scale_set_draw_value(GTK_SCALE(s), FALSE);
+    gtk_range_set_value(GTK_RANGE(s), value);
+    for (int i = lo; i <= hi; i++)
+        gtk_scale_add_mark(GTK_SCALE(s), i, GTK_POS_BOTTOM, NULL);
+    gtk_widget_set_size_request(s, S(260), -1);
+    g_signal_connect(s, "value-changed", G_CALLBACK(mouse_slider_changed), GINT_TO_POINTER(which));
+    gtk_box_pack_start(GTK_BOX(row), label_new(left, "footnote", 1), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(row), s, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(row), label_new(right, "footnote", 0), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), row, FALSE, FALSE, 0);
+    return box;
 }
 
 /* The arrow, white with a dark edge like Adwaita's, its tip at (x, y),
@@ -1034,6 +1161,11 @@ static void page_mouse(GtkWidget *page)
     gtk_box_pack_start(GTK_BOX(box), row, FALSE, FALSE, 0);
     row_add(g, box);
 
+    g = group_new(page, "Mouse and touchpad");
+    row_add(g, mouse_slider("Speed", SPEED_MIN, SPEED_MAX, mouse_speed, "Slow", "Fast", 0));
+    row_add(g, mouse_slider("Acceleration", ACCEL_MIN, ACCEL_MAX, mouse_acc, "None", "Most", 1));
+    row_add(g, scroll_row());
+
     g = group_new(page, "Keyboard shortcuts");
     row_value(g, "Start menu", "Ctrl+Esc or the Windows key");
     row_value(g, "Switch windows", "Alt+Tab");
@@ -1047,8 +1179,12 @@ static void page_mouse(GtkWidget *page)
     gtk_box_pack_start(GTK_BOX(page),
                        label_new("The pointer grows with the desktop's size (Displays) too. Programs "
                                  "that are already open keep their pointer until they are opened "
-                                 "again; Settings and the desktop change at once. Each user has their "
-                                 "own size (~/.config/myos/mouse.conf).",
+                                 "again; Settings and the desktop change at once. Speed and "
+                                 "acceleration change at once, for every mouse and touchpad. "
+                                 "Acceleration carries a quick move further than a slow one. To "
+                                 "drag with a touchpad, press it with one finger (a thumb in a "
+                                 "corner) and move another, as on a Mac. Each "
+                                 "user has their own (~/.config/myos/mouse.conf).",
                                  "footnote", 0),
                        FALSE, FALSE, 0);
 }
@@ -2585,7 +2721,8 @@ static const struct page pages[] = {
     {"wallpaper", "Wallpaper", NULL, page_wallpaper, IC_WALLPAPER,
      "wallpaper background picture image photo desktop fill screen color"},
     {"mouse", "Mouse & Keyboard", NULL, page_mouse, IC_MOUSE,
-     "pointer cursor arrow size bigger larger mouse keyboard shortcuts keys"},
+     "pointer cursor arrow size bigger larger mouse keyboard shortcuts keys "
+     "touchpad trackpad scroll scrolling two fingers drag"},
     {"usersgroups", "Users & Groups", NULL, page_users, IC_USERS, "account people login password admin add new user"},
     {"ethernet", "Ethernet", "network", page_ethernet, -1, NULL},
     {"about", "About", "general", page_about, -1, NULL},

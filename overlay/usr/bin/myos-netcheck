@@ -1,0 +1,120 @@
+#!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Rodger Wilson
+# myos-netcheck — Wi-Fi joins but nothing loads: find the step that breaks.
+#
+# Each line is one step of getting a web page, in order: the radio's link,
+# the address DHCP gave us, the way out (the default route, the gateway),
+# the internet by number (no names), the nameserver, then names, TCP, and
+# HTTPS. The first FAIL is the answer; the lines after it fail because of it.
+# Except ping: some networks drop it while the web works.
+# Sized to fit one xterm screen, so a photo of it is the whole report. A copy
+# is saved in ~/network-check.txt.
+#
+# On the desktop as "Network Check.command" (a link made by /etc/icewm/startup;
+# like the Mac's .command files, a double-click runs it in a terminal).
+# It only looks: nothing is changed.
+
+# Started from the desktop there is no terminal: open one and run in it.
+if ! { [ -t 0 ] && [ -t 1 ]; } && [ -n "${DISPLAY:-}" ]; then
+    exec xterm -title "Network Check" -geometry 100x46 -fa "DejaVu Sans Mono" -fs 10 -e "$0" "$@"
+fi
+
+IF=${1:-wlan0}
+
+# check LABEL COMMAND...: one line, OK or FAIL, and the command's last line.
+check() {
+    label=$1
+    shift
+    out=$("$@" 2>&1)
+    rc=$?
+    last=$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1 | cut -c1-58)
+    if [ "$rc" -eq 0 ]; then
+        printf ' OK   %-36s %s\n' "$label" "$last"
+    else
+        printf ' FAIL %-36s rc=%s %s\n' "$label" "$rc" "$last"
+    fi
+}
+
+ping2() { timeout 8 ping -c 2 -W 2 "$1"; }
+
+# A name through the C library, as every program asks: resolv.conf's server.
+lookup() {
+    timeout 12 python3 -c 'import socket,sys; print(socket.gethostbyname(sys.argv[1]))' "$1"
+}
+
+# One DNS question sent straight to SERVER over UDP, past resolv.conf: tells a
+# bad nameserver from DHCP apart from DNS (UDP port 53) not getting out at all.
+askdns() {
+    python3 - "$1" "$2" <<'EOF'
+import random, socket, struct, sys
+name, server = sys.argv[1], sys.argv[2]
+q = struct.pack('>HHHHHH', random.randint(0, 65535), 0x0100, 1, 0, 0, 0)
+q += b''.join(bytes([len(p)]) + p.encode() for p in name.split('.')) + b'\0'
+q += struct.pack('>HH', 1, 1)
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(4)
+s.sendto(q, (server, 53))
+r = s.recv(512)
+answers, rcode = struct.unpack('>H', r[6:8])[0], r[3] & 15
+print('rcode', rcode, 'answers', answers, '.'.join(map(str, r[-4:])) if answers else '')
+sys.exit(0 if answers else 1)
+EOF
+}
+
+# HTTP status, and where it sends us: a hotel or airport login page shows up
+# here as a redirect (302) or a page that isn't the expected one.
+http() { curl -sS -m 10 -o /dev/null -w '%{http_code} %{redirect_url}' "$1"; }
+
+portal() {
+    body=$(curl -sS -m 10 http://www.msftconnecttest.com/connecttest.txt) || return 1
+    [ "$body" = "Microsoft Connect Test" ] && echo "open internet" && return 0
+    echo "login page? got: $(printf '%s' "$body" | tr -s '\n\t ' ' ' | cut -c1-40)"
+    return 1
+}
+
+main() {
+    echo "MyOS network check   $(date '+%Y-%m-%d %H:%M:%S')   kernel $(uname -r)   user $(id -un)"
+    echo "== Wi-Fi ($IF)"
+    wpa_cli -i "$IF" status 2>&1 | grep -E '^(wpa_state|ssid|bssid|freq|key_mgmt|ip_address)=' | tr '\n' ' '
+    echo
+    iw dev "$IF" link 2>&1 | grep -E 'Not connected|signal|tx bitrate' | tr -s ' \t' ' '
+    echo "== Addresses, and packets in and out of $IF (RX near 0 = nothing comes back)"
+    ip -4 -o addr 2>&1 | awk '{print " ", $2, $4}'
+    ifconfig "$IF" 2>&1 | grep -E 'inet |RX packets|TX packets|errors' | tr -s ' ' ' ' | head -n 5
+    echo "== Routes (route -n)"
+    route -n 2>&1 | tail -n +2
+    GW=$(route -n 2>/dev/null | awk '$1 == "0.0.0.0" { print $2; exit }')
+    echo "== DNS: /etc/resolv.conf -> $(readlink /etc/resolv.conf 2>/dev/null || echo 'a file, not a link')"
+    grep -v '^#' /etc/resolv.conf 2>&1 | grep -v '^[[:space:]]*$' | head -n 3
+    DNS=$(awk '/^nameserver/ { print $2; exit }' /etc/resolv.conf 2>/dev/null)
+    echo "== Tests (first FAIL is the problem; some networks drop ping, the TCP lines decide)"
+    if [ -n "$GW" ]; then
+        check "ping gateway $GW" ping2 "$GW"
+    else
+        echo " FAIL no default route: DHCP gave no gateway, or it isn't installed"
+    fi
+    check "ping 1.1.1.1 (no DNS needed)" ping2 1.1.1.1
+    check "ping 8.8.8.8 (no DNS needed)" ping2 8.8.8.8
+    if [ -n "$DNS" ]; then
+        check "ping nameserver $DNS" ping2 "$DNS"
+        check "DNS example.com via $DNS" askdns example.com "$DNS"
+    else
+        echo " FAIL resolv.conf has no nameserver"
+    fi
+    check "DNS example.com via 1.1.1.1" askdns example.com 1.1.1.1
+    check "DNS example.com via 8.8.8.8" askdns example.com 8.8.8.8
+    check "lookup example.com (C library)" lookup example.com
+    check "lookup cloudflare.com (C library)" lookup cloudflare.com
+    check "TCP http://1.1.1.1 (no DNS)" http http://1.1.1.1/
+    check "login page check (msftconnecttest)" portal
+    check "HTTP  http://example.com" http http://example.com/
+    check "HTTPS https://example.com" http https://example.com/
+    check "HTTPS https://1.1.1.1 (no DNS)" http https://1.1.1.1/
+    echo "== Kernel log (network lines)"
+    dmesg 2>&1 | grep -iE 'dhcp|ipv4|wlan|iwl|wifi|80211|tcp|dns|denied' | tail -n 10 | cut -c1-98
+}
+
+main 2>&1 | tee "$HOME/network-check.txt"
+printf '\nSaved in %s. Take the photo, then press Enter to close.' "$HOME/network-check.txt"
+read -r _

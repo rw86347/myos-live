@@ -132,6 +132,20 @@ test-install: $(INSTALL_IMG)
 	    --machine $${t%%:*} --disk $${t##*:} || ok=0; done; \
 	  [ $$ok = 1 ] && echo "INSTALL TEST OK ($(ARCH)): $(INSTALL_TESTS)" || exit 1
 
+# Upgrade from the stick onto a disk this installer already made
+# (live/tools/test-install.py --upgrade). One UEFI and one BIOS run by default.
+ifeq ($(ARCH),x86_64)
+UPGRADE_TESTS ?= q35:nvme
+else
+UPGRADE_TESTS ?= pc:ide
+endif
+test-upgrade: $(INSTALL_IMG)
+	@ok=1; for t in $(UPGRADE_TESTS); do \
+	  python3 live/tools/test-install.py --upgrade --image $(INSTALL_IMG) $(INSTALL_FW) \
+	    --e2fsck $(E2FS)/e2fsck --debugfs $(DEBUGFS) --work $(BUILD)/test-upgrade \
+	    --machine $${t%%:*} --disk $${t##*:} || ok=0; done; \
+	  [ $$ok = 1 ] && echo "UPGRADE TEST OK ($(ARCH)): $(UPGRADE_TESTS)" || exit 1
+
 # RAM-only login (no ext2): what a real UEFI laptop does until USB MSC exists.
 UEFI_LOGIN_IMG := $(BUILD)/myos-uefi-login.img
 $(UEFI_LOGIN_IMG): $(BUILD)/BOOTX64.EFI $(BUILD)/kernel.bin $(LIVE_LOGIN_INITRD) \
@@ -223,18 +237,28 @@ $(LOGIN_BIN): live/myos-login/myos-login.c live/common/xpic.h | $(LIVE_SYSROOT)/
 	  $(BUILD)/live/myos-login.o -L$(LIVE_SYSROOT)/usr/lib -L$(LIVE_SYSROOT)/lib \
 	  $(LOGIN_LDLIBS) $(LIVE_SYSROOT)/usr/lib/crtn.o -o $@
 
+# Mission Control for the X11 desktop (live/myos-mission): myos-menu starts
+# it from the page curl. The layout is the Wayland session's (live/myos-wm/layout.c).
+MISSION_BIN := $(LIVE_EXTRA)/usr/bin/myos-mission
+$(MISSION_BIN): live/myos-mission/myos-mission.c live/myos-wm/layout.c live/myos-wm/layout.h | $(LIVE_SYSROOT)/.done
+	@mkdir -p $(dir $@) $(BUILD)/live
+	$(CC) $(LOGIN_CFLAGS) -Ilive/myos-wm -c live/myos-mission/myos-mission.c -o $(BUILD)/live/myos-mission.o
+	$(CC) $(LOGIN_CFLAGS) -Ilive/myos-wm -c live/myos-wm/layout.c -o $(BUILD)/live/myos-mission-layout.o
+	$(call LIVE_LINK,$(BUILD)/live/myos-mission.o $(BUILD)/live/myos-mission-layout.o,\
+	  -lX11 -lXrender -lXft -l:libXcomposite.so.1)
+
 # The Start menu (live/myos-menu): the same libraries, less PAM.
 MENU_BIN := $(LIVE_EXTRA)/usr/bin/myos-menu
 $(MENU_BIN): live/myos-menu/myos-menu.c live/myos-menu/programs.c live/myos-menu/programs.h \
-             live/common/xpic.h | $(LIVE_SYSROOT)/.done
+             live/common/xpic.h live/myos-battery/power_supply.h | $(LIVE_SYSROOT)/.done
 	@mkdir -p $(dir $@) $(BUILD)/live
-	$(CC) $(LOGIN_CFLAGS) -Ilive/common -Ilive/myos-menu -c live/myos-menu/myos-menu.c -o $(BUILD)/live/myos-menu.o
+	$(CC) $(LOGIN_CFLAGS) -Ilive/common -Ilive/myos-menu -Ilive/myos-battery -c live/myos-menu/myos-menu.c -o $(BUILD)/live/myos-menu.o
 	$(CC) $(LOGIN_CFLAGS) -Ilive/common -Ilive/myos-menu -c live/myos-menu/programs.c -o $(BUILD)/live/programs.o
 	$(CC) -nostdlib -Wl,-z,noexecstack -Wl,-dynamic-linker,$(MUSL_LDSO) \
 	  -Wl,-rpath-link,$(LIVE_SYSROOT)/usr/lib:$(LIVE_SYSROOT)/lib \
 	  $(LIVE_SYSROOT)/usr/lib/crt1.o $(LIVE_SYSROOT)/usr/lib/crti.o \
 	  $(BUILD)/live/myos-menu.o $(BUILD)/live/programs.o -L$(LIVE_SYSROOT)/usr/lib -L$(LIVE_SYSROOT)/lib \
-	  -lX11 -lXft -lImlib2 -lc -lgcc $(LIVE_SYSROOT)/usr/lib/crtn.o -o $@
+	  -lX11 -lXft -lImlib2 -l:libXfixes.so.3 -l:libXi.so.6 -lc -lgcc $(LIVE_SYSROOT)/usr/lib/crtn.o -o $@
 
 # Settings (live/myos-settings): a GTK3 program, and myos-xsettings, which
 # applies the desktop's scale. GTK's headers come from packages.txt's
@@ -270,9 +294,9 @@ $(SETTINGS_BIN): live/myos-settings/myos-settings.c live/myos-settings/scale.h \
 # The Wi-Fi tray icon (live/myos-wifi): GTK3, wpa_supplicant's control
 # socket. Started by IceWM's startup script.
 WIFI_BIN := $(LIVE_EXTRA)/usr/bin/myos-wifi
-$(WIFI_BIN): live/myos-wifi/myos-wifi.c live/myos-settings/scale.h | $(LIVE_SYSROOT)/.done
+$(WIFI_BIN): live/myos-wifi/myos-wifi.c live/myos-settings/scale.h live/common/menu_bubble.h | $(LIVE_SYSROOT)/.done
 	@mkdir -p $(dir $@) $(BUILD)/live
-	$(CC) $(LOGIN_CFLAGS) $(GTK_CFLAGS) -Ilive/myos-settings -Wno-deprecated-declarations \
+	$(CC) $(LOGIN_CFLAGS) $(GTK_CFLAGS) -Ilive/myos-settings -Ilive/common -Wno-deprecated-declarations \
 	  -c $< -o $(BUILD)/live/myos-wifi.o
 	$(call LIVE_LINK,$(BUILD)/live/myos-wifi.o,-lgtk-3 -lgdk-3 -lgdk_pixbuf-2.0 -lgobject-2.0 \
 	  -lglib-2.0 -lcairo -lpango-1.0 -lX11 -lm)
@@ -352,11 +376,47 @@ $(TRASH_BIN): live/myos-trash/myos-trash.c live/myos-settings/scale.h | $(LIVE_S
 # wheel's steps. The sound card's controls through include/sound/asound.h
 # (quoted: Alpine's linux-headers has its own, with other field names).
 VOLUME_BIN := $(LIVE_EXTRA)/usr/bin/myos-volume
-$(VOLUME_BIN): live/myos-volume/myos-volume.c include/sound/asound.h | $(LIVE_SYSROOT)/.done
+$(VOLUME_BIN): live/myos-volume/myos-volume.c include/sound/asound.h live/common/menu_bubble.h \
+             live/common/tray_follow.h | $(LIVE_SYSROOT)/.done
 	@mkdir -p $(dir $@) $(BUILD)/live
-	$(CC) $(LOGIN_CFLAGS) $(GTK_CFLAGS) -iquote include/sound -Wno-deprecated-declarations \
+	$(CC) $(LOGIN_CFLAGS) $(GTK_CFLAGS) -iquote include/sound -Ilive/common -Wno-deprecated-declarations \
 	  -c $< -o $(BUILD)/live/myos-volume.o
-	$(call LIVE_LINK,$(BUILD)/live/myos-volume.o,-lgtk-3 -lgdk-3 -lgobject-2.0 -lglib-2.0)
+	$(call LIVE_LINK,$(BUILD)/live/myos-volume.o,-lgtk-3 -lgdk-3 -lgobject-2.0 -lglib-2.0 -lcairo)
+# The battery in the tray (live/myos-battery): the pop-up with the charge,
+# the time left, health and the power-saving slider (platform_profile).
+BATTERY_BIN := $(LIVE_EXTRA)/usr/bin/myos-battery
+$(BATTERY_BIN): live/myos-battery/myos-battery.c live/myos-battery/power_supply.h \
+             live/common/tray_follow.h | $(LIVE_SYSROOT)/.done
+	@mkdir -p $(dir $@) $(BUILD)/live
+	$(CC) $(LOGIN_CFLAGS) $(GTK_CFLAGS) -Ilive/common -Wno-deprecated-declarations \
+	  -c $< -o $(BUILD)/live/myos-battery.o
+	$(call LIVE_LINK,$(BUILD)/live/myos-battery.o,-lgtk-3 -lgdk-3 -lgobject-2.0 -lglib-2.0 -lcairo)
+# Ctrl+Space between the keyboards, and its bubble (live/myos-input). IBus
+# is on the x86_64 disk only; libibus is linked by its file name (the
+# sysroot has the library, not ibus-dev's .so link and headers).
+ifeq ($(ARCH),x86_64)
+INPUT_BIN := $(LIVE_EXTRA)/usr/bin/myos-input
+endif
+$(LIVE_EXTRA)/usr/bin/myos-input: live/myos-input/myos-input.c live/common/menu_bubble.h | $(LIVE_SYSROOT)/.done
+	@mkdir -p $(dir $@) $(BUILD)/live
+	$(CC) $(LOGIN_CFLAGS) $(GTK_CFLAGS) -Ilive/common -Wno-deprecated-declarations \
+	  -c $< -o $(BUILD)/live/myos-input.o
+	$(call LIVE_LINK,$(BUILD)/live/myos-input.o,-l:libibus-1.0.so.5 -lgtk-3 -lgdk-3 -lgio-2.0 \
+	  -lgobject-2.0 -lglib-2.0 -lpango-1.0 -lpangocairo-1.0 -lcairo -lX11)
+# Dimming, then the screen off, when nobody uses it (live/myos-idle): how
+# soon follows the battery slider and the charger.
+IDLE_BIN := $(LIVE_EXTRA)/usr/bin/myos-idle
+$(IDLE_BIN): live/myos-idle/myos-idle.c | $(LIVE_SYSROOT)/.done
+	@mkdir -p $(dir $@) $(BUILD)/live
+	$(CC) $(LOGIN_CFLAGS) -c $< -o $(BUILD)/live/myos-idle.o
+	$(call LIVE_LINK,$(BUILD)/live/myos-idle.o,-lX11 -lXext)
+# power_supply.h on the build machine: a made-up /sys, its times and health.
+.PHONY: test-power-supply
+test-power-supply:
+	@mkdir -p $(BUILD)/host
+	cc -std=c11 -Wall -Wextra -Werror -Wno-unused-result live/myos-battery/test-power-supply.c \
+	  -o $(BUILD)/host/test-power-supply
+	$(BUILD)/host/test-power-supply
 # Force Quit (live/myos-forcequit): kill -9 a program that stopped
 # answering; Ctrl+Shift+Esc (etc/icewm/keys) and All Programs → System Tools.
 FORCEQUIT_BIN := $(LIVE_EXTRA)/usr/bin/myos-forcequit
@@ -405,7 +465,7 @@ $(PREVIEW_BIN): $(PREVIEW_OBJS) $(HEIF_PIXBUF_OBJ) live/myos-preview/preview.des
 $(XSETTINGS_BIN): live/myos-settings/myos-xsettings.c live/myos-settings/scale.h | $(LIVE_SYSROOT)/.done
 	@mkdir -p $(dir $@) $(BUILD)/live
 	$(CC) $(LOGIN_CFLAGS) -c $< -o $(BUILD)/live/myos-xsettings.o
-	$(call LIVE_LINK,$(BUILD)/live/myos-xsettings.o,-lX11)
+	$(call LIVE_LINK,$(BUILD)/live/myos-xsettings.o,-lX11 $(LIVE_SYSROOT)/usr/lib/libXi.so.6)
 # /sbin/init's first step: /dev/console to the serial port (TIOCCONS), so
 # the boot screen shows the steps and "MyOS is up." and nothing else.
 CONSOLE_BIN := $(LIVE_EXTRA)/usr/libexec/myos-console
@@ -456,6 +516,19 @@ MKESP_BIN := $(LIVE_EXTRA)/usr/libexec/myos-mkesp
 $(MKESP_BIN): live/myos-install/myos-mkesp
 	@mkdir -p $(dir $@)
 	install -m 755 $< $@
+# The upgrade's file list (checksums) and this build's version.
+MANIFEST_BIN := $(LIVE_EXTRA)/usr/libexec/myos-manifest
+$(MANIFEST_BIN): live/myos-install/myos-manifest
+	@mkdir -p $(dir $@)
+	install -m 755 $< $@
+RELEASE_FILE := $(LIVE_EXTRA)/usr/lib/myos/release
+$(RELEASE_FILE): $(BUILD)/kernel-version live/tools/write-release.py \
+                 $(wildcard $(BUILD)/BOOTX64.EFI) arch/i386/boot/efi/vga-font.bin
+	@mkdir -p $(dir $@)
+	python3 live/tools/write-release.py --kernel-version $(BUILD)/kernel-version \
+	  --arch $(ARCH) --out $@ \
+	  $(if $(wildcard $(BUILD)/BOOTX64.EFI),--bootx64 $(BUILD)/BOOTX64.EFI) \
+	  --font arch/i386/boot/efi/vga-font.bin
 $(INSTALL_BIN): $(BUILD)/live/install/plan.o $(BUILD)/live/install/disks.o \
                 $(BUILD)/live/install/myos-install.o live/overlay/usr/share/applications/myos-install.desktop
 	@mkdir -p $(dir $@) $(LIVE_EXTRA)/usr/share/applications
@@ -487,19 +560,22 @@ WP_CXXV   = $(notdir $(firstword $(wildcard $(LIVE_SYSROOT)/usr/include/c++/*)))
 LIVE_CLANG := clang --target=$(ALPINE_TRIPLET) $(LIVE_MARCH) --sysroot=$(abspath $(LIVE_SYSROOT)) -O2 -MMD -MP
 # agent.c calls select() without <sys/select.h>; glibc brings it in through
 # other headers, musl doesn't.
-WP_CFLAGS  := -std=c11 -D_DEFAULT_SOURCE -w -include sys/select.h -I$(WP_DIR)/src -I$(WP_LT)/engine/include $(GTK_CFLAGS)
+WP_CFLAGS  := -std=c11 -D_DEFAULT_SOURCE -w -include sys/select.h -I$(WP_DIR)/src -I$(WP_LT)/engine/include \
+              -I$(WP_DIR)/third_party/quickjs-ng $(GTK_CFLAGS)
 WP_CXXFLAGS = -std=c++17 -w -nostdinc++ -isystem $(LIVE_SYSROOT)/usr/include/c++/$(WP_CXXV) \
                -isystem $(LIVE_SYSROOT)/usr/include/c++/$(WP_CXXV)/$(ALPINE_TRIPLET) \
                -isystem $(LIVE_SYSROOT)/usr/include/libxml2 -I$(WP_LT)/engine/include \
                -I$(WP_LT)/morfologik/include -DPCRE2_CODE_UNIT_WIDTH=8 \
                '-DLT_RESOURCE_DIR="/usr/share/writeperfect/languagetool"'
-WP_C   := doc wpd view cmd files screen iofmt font agent grammar clip extra extra_cmd zh_ai main \
-          gui_gtk hanzi_stroke plugin_host
+# The same files as WritePerfect's linux/Makefile, with the terminal's
+# plugin pane (tplug, tmods: QuickJS runs its pages).
+WP_C   := doc wpd view cmd files screen iofmt font agent grammar clip extra extra_cmd zh_ai \
+          tplug tmods tsave main gui_gtk hanzi_stroke plugin_host
 WP_CPP := utf16 StringTools Regex ResourceDataBroker core_types Rule Language JLanguageTool \
           WordTokenizer EnglishWordTokenizer SRXSentenceTokenizer morfologik EnglishTagger \
           XmlRuleDisambiguator EnglishChunker EnglishSynthesizer RuleFilters rules_builtin \
           rules_en PatternRuleLoader lt_c_api
-WP_OBJS := $(WP_C:%=$(WP_OUT)/%.o) $(WP_CPP:%=$(WP_OUT)/lt/%.o)
+WP_OBJS := $(WP_C:%=$(WP_OUT)/%.o) $(WP_CPP:%=$(WP_OUT)/lt/%.o) $(WP_OUT)/quickjs.o
 -include $(WP_OBJS:.o=.d)
 
 $(WP_OUT)/%.o: $(WP_DIR)/src/%.c | $(LIVE_SYSROOT)/.done
@@ -508,6 +584,9 @@ $(WP_OUT)/%.o: $(WP_DIR)/src/%.c | $(LIVE_SYSROOT)/.done
 $(WP_OUT)/%.o: $(WP_DIR)/linux/%.c | $(LIVE_SYSROOT)/.done
 	@mkdir -p $(dir $@)
 	$(LIVE_CLANG) $(WP_CFLAGS) -c $< -o $@
+$(WP_OUT)/quickjs.o: $(WP_DIR)/third_party/quickjs-ng/quickjs-amalgam.c | $(LIVE_SYSROOT)/.done
+	@mkdir -p $(dir $@)
+	$(LIVE_CLANG) -std=gnu11 -w -c $< -o $@
 $(WP_OUT)/lt/%.o: $(WP_LT)/engine/src/%.cpp | $(LIVE_SYSROOT)/.done
 	@mkdir -p $(dir $@)
 	$(LIVE_CLANG) $(WP_CXXFLAGS) -c $< -o $@
@@ -556,19 +635,20 @@ $(FW_STAMP): tools/fetch-firmware.sh
 
 LIVE_THEME := $(LIVE_EXTRA)/.theme
 $(LIVE_THEME): live/theme/make-live-theme.py live/assets/themes/golden-hour/make-theme.py \
+               $(wildcard live/assets/themes/golden-hour/icons/svg/*.svg) \
                $(wildcard $(WP_DIR)/myos/writeperfect.svg) live/myos-preview/preview.svg
 	LIVE_EXTRA=$(LIVE_EXTRA) WP_DIR=$(WP_DIR) python3 live/theme/make-live-theme.py
 	@touch $@
 
 live-theme: $(LIVE_THEME)
-live-extra: $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(CONSOLE_BIN) $(MENU_BIN) $(SETTINGS_BIN) $(XSETTINGS_BIN) $(ADDUSER_BIN) $(KCONFIG_BIN) $(INSTALL_BIN) $(HELPER_BIN) $(MKESP_BIN) $(FILES_BIN) $(PREVIEW_BIN) $(WIFI_BIN) $(DESKTOP_BIN) $(WP_BIN) $(RM_BIN) $(TRASH_BIN) $(VOLUME_BIN) $(FORCEQUIT_BIN) $(CHOOSE_BIN) $(PLAYER_BIN) $(WM_BIN)
+live-extra: $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(CONSOLE_BIN) $(MENU_BIN) $(SETTINGS_BIN) $(XSETTINGS_BIN) $(ADDUSER_BIN) $(KCONFIG_BIN) $(INSTALL_BIN) $(HELPER_BIN) $(MKESP_BIN) $(MANIFEST_BIN) $(RELEASE_FILE) $(FILES_BIN) $(PREVIEW_BIN) $(WIFI_BIN) $(DESKTOP_BIN) $(WP_BIN) $(RM_BIN) $(TRASH_BIN) $(VOLUME_BIN) $(BATTERY_BIN) $(IDLE_BIN) $(INPUT_BIN) $(FORCEQUIT_BIN) $(CHOOSE_BIN) $(PLAYER_BIN) $(WM_BIN) $(MISSION_BIN)
 
 # The live disk: like `make hd`, but myos-root holds the live userland
 # (live/tools/mklivehd.sh: owners, setuid bits and case-only names kept).
 # Every overlay file is a prerequisite. Names may have spaces ("My Files.desktop"
 # in the Programs menu): find's output is escaped so make keeps each one whole.
 OVERLAY_DEPS := $(shell find live/overlay live/overlay.local -type f 2>/dev/null | sed 's/ /\\ /g')
-$(LIVE_TAR): $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(CONSOLE_BIN) $(MENU_BIN) $(SETTINGS_BIN) $(XSETTINGS_BIN) $(ADDUSER_BIN) $(KCONFIG_BIN) $(INSTALL_BIN) $(HELPER_BIN) $(MKESP_BIN) $(FILES_BIN) $(PREVIEW_BIN) $(WIFI_BIN) $(DESKTOP_BIN) $(WP_BIN) $(RM_BIN) $(TRASH_BIN) $(VOLUME_BIN) $(FORCEQUIT_BIN) $(CHOOSE_BIN) $(PLAYER_BIN) $(WM_BIN) $(LIVE_LOCK) $(OVERLAY_DEPS)
+$(LIVE_TAR): $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(CONSOLE_BIN) $(MENU_BIN) $(SETTINGS_BIN) $(XSETTINGS_BIN) $(ADDUSER_BIN) $(KCONFIG_BIN) $(INSTALL_BIN) $(HELPER_BIN) $(MKESP_BIN) $(MANIFEST_BIN) $(RELEASE_FILE) $(FILES_BIN) $(PREVIEW_BIN) $(WIFI_BIN) $(DESKTOP_BIN) $(WP_BIN) $(RM_BIN) $(TRASH_BIN) $(VOLUME_BIN) $(BATTERY_BIN) $(IDLE_BIN) $(INPUT_BIN) $(FORCEQUIT_BIN) $(CHOOSE_BIN) $(PLAYER_BIN) $(WM_BIN) $(MISSION_BIN) $(LIVE_LOCK) live/tools/fetch-live.py $(OVERLAY_DEPS)
 	python3 live/tools/fetch-live.py --arch $(ALPINE_ARCH)
 ifeq ($(ARCH),x86_64)
 $(LIVE_HD): $(LIVE_TAR) live/tools/mklivehd.sh
@@ -581,7 +661,7 @@ live-hd: $(LIVE_HD)
 
 # RAM login for a UEFI stick when the kernel cannot see the ext2 root.
 # The Pentium floppy initrd stays BusyBox. WritePerfect is left on disk.
-$(LIVE_LOGIN_TAR): $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(CONSOLE_BIN) $(MENU_BIN) $(XSETTINGS_BIN) $(WIFI_BIN) \
+$(LIVE_LOGIN_TAR): $(FW_STAMP) $(LIVE_THEME) $(LOGIN_BIN) $(CONSOLE_BIN) $(MENU_BIN) $(MISSION_BIN) $(XSETTINGS_BIN) $(WIFI_BIN) \
                    $(RM_BIN) $(LIVE_LOCK) live/tools/fetch-live.py \
                    $(OVERLAY_DEPS)
 	python3 live/tools/fetch-live.py --arch $(ALPINE_ARCH) --login-root

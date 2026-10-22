@@ -23,6 +23,7 @@
 #include <unistd.h>
 
 #include "kconfig_features.h"       /* made from tools/kconfig/powerfeatures.py */
+_Static_assert(KF_FAMILIES == sizeof ((struct kfeature *)0)->support, "kconfig.h: one support per family");
 
 static const char *const ARCH[] = {NULL, "i386", "x86_64", "arm", "arm64"};
 static const char *const MODE[] = {"realtime", "soft-realtime", "power-saving"};
@@ -448,6 +449,9 @@ void kc_detect(struct kc_machine *m)
     cpuid(6, r6);
     cpuid(0x80000007, e7);
     cpuid(0x80000008, e8);
+    /* Intel Core from Skylake on: the ones with HWP (the P2 Max, the Katana). */
+    if (m->family < 0 && !strcmp(vendor, "GenuineIntel") && strstr(m->cpu, "Core") && (r6[0] >> 7 & 1))
+        m->family = 3;
     m->virt = r1[2] >> 31 & 1;                          /* the hypervisor bit */
     const char *vm = "A virtual machine's processor: the host (your Mac) manages its power";
 
@@ -519,9 +523,13 @@ int kc_cstate_ok(const struct kc_machine *m, int n)
 const struct kcstate *kc_soft_cstate(const struct kc_machine *m, unsigned budget_us)
 {
     const struct kcstate *best = &kcstates[0];
-    for (int i = 0; i < KF_CSTATES; i++)
-        if (kc_cstate_ok(m, kcstates[i].n) && (unsigned)kcstates[i].wake_us <= budget_us)
-            best = &kcstates[i];
+    for (int i = 0; i < KF_CSTATES; i++) {      /* as powerfeatures.py: down while each fits */
+        if (!kc_cstate_ok(m, kcstates[i].n))
+            continue;
+        if ((unsigned)kcstates[i].wake_us > budget_us)
+            break;
+        best = &kcstates[i];
+    }
     return best;
 }
 

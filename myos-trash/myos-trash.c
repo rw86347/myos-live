@@ -130,13 +130,18 @@ static void place(void)
 }
 
 /* Wallpaper behind the icon, from icewmbg's root pixmap — not from the
-   screen, or a window sitting over the can would be baked into it. */
+   screen, or a window sitting over the can would be baked into it. At 200%
+   and above GTK doubles the window (scale factor 2): the position and size
+   it reports are half the screen's pixels, so the copy is taken at f times
+   them and handed to cairo as a picture of that density. Taken at the
+   reported numbers, it came from the wrong place and was stretched: a
+   faint box around the can. */
 static void paint_wallpaper(cairo_t *cr, int w, int h)
 {
     Display *dpy = gdk_x11_get_default_xdisplay();
     Window root = DefaultRootWindow(dpy);
     Atom a = XInternAtom(dpy, "_XROOTPMAP_ID", False), type;
-    int fmt, wx = 0, wy = 0;
+    int fmt, wx = 0, wy = 0, f = gtk_widget_get_scale_factor(win);
     unsigned long n, after;
     unsigned char *data = NULL;
     gtk_window_get_position(GTK_WINDOW(win), &wx, &wy);
@@ -149,20 +154,22 @@ static void paint_wallpaper(cairo_t *cr, int w, int h)
     }
     if (pm == None)
         return;
-    XImage *im = XGetImage(dpy, pm, wx, wy, w, h, AllPlanes, ZPixmap);
+    int pw = w * f, ph = h * f;
+    XImage *im = XGetImage(dpy, pm, wx * f, wy * f, (unsigned)pw, (unsigned)ph, AllPlanes, ZPixmap);
     if (!im)
         return;
-    cairo_surface_t *s = cairo_image_surface_create(CAIRO_FORMAT_RGB24, w, h);
+    cairo_surface_t *s = cairo_image_surface_create(CAIRO_FORMAT_RGB24, pw, ph);
     unsigned char *dst = cairo_image_surface_get_data(s);
     int stride = cairo_image_surface_get_stride(s);
-    for (int y = 0; y < h; y++) {
+    for (int y = 0; y < ph; y++) {
         uint32_t *row = (uint32_t *)(dst + y * stride);
-        for (int x = 0; x < w; x++) {
+        for (int x = 0; x < pw; x++) {
             unsigned long p = XGetPixel(im, x, y);
             row[x] = 0xff000000u | (uint32_t)p;
         }
     }
     cairo_surface_mark_dirty(s);
+    cairo_surface_set_device_scale(s, f, f);
     cairo_set_source_surface(cr, s, 0, 0);
     cairo_paint(cr);
     cairo_surface_destroy(s);

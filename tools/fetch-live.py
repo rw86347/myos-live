@@ -731,6 +731,18 @@ def add_live_user(root):
     ti.uid = ti.gid = uid
     ti.uname = ti.gname = name
     root.add(ti, None, "overlay", "MyOS live user")
+    # A folder the skel has files in but no entry for (Documents/ from the
+    # overlay) would be made by tar as root's: the user couldn't save there.
+    folders = set()
+    for p in root.skel:
+        while (p := os.path.dirname(p)) != "etc/skel":
+            folders.add(p)
+    for path in sorted(folders):
+        ti = tarfile.TarInfo(home + path[len("etc/skel"):])
+        ti.type, ti.mode, ti.mtime = tarfile.DIRTYPE, 0o755, int(time.time())
+        ti.uid = ti.gid = uid
+        ti.uname = ti.gname = name
+        root.add(ti, None, "overlay", "MyOS live user")
     for path in sorted(root.skel):
         sti, body = root.skel[path]
         ti = tarfile.TarInfo(home + path[len("etc/skel"):])

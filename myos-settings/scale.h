@@ -5,7 +5,12 @@
  * myos-xsettings (which applies them) and myos-settings (where people
  * choose them).
  *
- * The scale is a percentage, 100 to 200. 0 means "automatic": whatever
+ * The scale is a percentage, 100 to 300, in steps of 25 (the theme has a
+ * set of pictures for each). Past 200 GTK still draws whole windows 2x
+ * and the fonts grow the rest of the way, so every program that sizes its
+ * own drawing by pct / 200 above 200 goes on working: small, sharp
+ * screens (the GPD P2 Max: 2560 x 1600 at 8.9") want 250-300.
+ * 0 means "automatic": whatever
  * auto_scale() picks for the screen. It is kept per user, in
  * ~/.config/myos/display.conf, as "scale=150" or "scale=auto".
  */
@@ -18,7 +23,8 @@
 #include <sys/stat.h>
 
 #define SCALE_MIN 100
-#define SCALE_MAX 200
+#define SCALE_MAX 300
+#define SCALE_STEP 25
 
 /* What "automatic" means: the size that makes a 1920x1200 panel (a modern
    13-14" laptop, or a VM window on one) about as roomy as a 1280x800 one,
@@ -94,22 +100,62 @@ static inline int pointer_pixels(int scale, int pointer)
     return POINTER_BASE * scale / 100 * pointer / 100;
 }
 
-static inline int pointer_read_conf(void)
+/* How fast the pointer moves, 1 (slow) to 10, and how much a quick move
+   carries it further (acceleration), 0 (none) to 10; 5 and 5 are X's own
+   behaviour. Also in mouse.conf: "speed=5", "accel=5". myos-xsettings
+   turns them into X's settings (mouse_deceleration, mouse_accel). */
+#define SPEED_MIN 1
+#define SPEED_MAX 10
+#define ACCEL_MIN 0
+#define ACCEL_MAX 10
+#define SPEED_NORMAL 5
+#define ACCEL_NORMAL 5
+
+/* And "scroll=1": two fingers on a touchpad scroll (0: they point, as one
+   does). The kernel does it (drivers/hid/hid.c); this tells it. */
+struct mouse_conf {
+    int pointer, speed, accel, scroll;
+};
+
+#define TWO_FINGER_SCROLL "/sys/module/hid/parameters/two_finger_scroll"
+
+static inline void touchpad_apply(int scroll)
+{
+    FILE *f = fopen(TWO_FINGER_SCROLL, "w");
+    if (f) {
+        fputs(scroll ? "Y\n" : "N\n", f);
+        fclose(f);
+    }
+}
+
+static inline int clamp_to(int v, int lo, int hi)
+{
+    return v < lo ? lo : v > hi ? hi : v;
+}
+
+static inline struct mouse_conf mouse_read_conf(void)
 {
     char path[512], line[128];
-    int p = POINTER_MIN;
+    struct mouse_conf m = { POINTER_MIN, SPEED_NORMAL, ACCEL_NORMAL, 1 };
     scale_conf_path(path, sizeof path, "myos/mouse.conf");
     FILE *f = fopen(path, "r");
     if (!f)
-        return p;
-    while (fgets(line, sizeof line, f))
+        return m;
+    while (fgets(line, sizeof line, f)) {
         if (!strncmp(line, "pointer=", 8))
-            p = clamp_pointer(atoi(line + 8));
+            m.pointer = clamp_pointer(atoi(line + 8));
+        else if (!strncmp(line, "speed=", 6))
+            m.speed = clamp_to(atoi(line + 6), SPEED_MIN, SPEED_MAX);
+        else if (!strncmp(line, "accel=", 6))
+            m.accel = clamp_to(atoi(line + 6), ACCEL_MIN, ACCEL_MAX);
+        else if (!strncmp(line, "scroll=", 7))
+            m.scroll = atoi(line + 7) != 0;
+    }
     fclose(f);
-    return p;
+    return m;
 }
 
-static inline int pointer_write_conf(int p)
+static inline int mouse_write_conf(struct mouse_conf m)
 {
     char path[512];
     scale_conf_path(path, sizeof path, NULL);
@@ -120,8 +166,36 @@ static inline int pointer_write_conf(int p)
     FILE *f = fopen(path, "w");
     if (!f)
         return -1;
-    fprintf(f, "pointer=%d\n", p);
+    fprintf(f, "pointer=%d\nspeed=%d\naccel=%d\nscroll=%d\n", m.pointer, m.speed, m.accel, m.scroll);
     return fclose(f);
+}
+
+static inline int pointer_read_conf(void)
+{
+    return mouse_read_conf().pointer;
+}
+
+static inline int pointer_write_conf(int p)
+{
+    struct mouse_conf m = mouse_read_conf();
+    m.pointer = p;
+    return mouse_write_conf(m);
+}
+
+/* Speed s as X's "constant deceleration" (2 halves the speed): about
+   0.4x to 3x around 1x at 5, in steps a third of a doubling apart. */
+static inline float mouse_deceleration(int s)
+{
+    static const float d[SPEED_MAX + 1] = { 1, 2.5f, 2.0f, 1.6f, 1.25f, 1.0f, 0.8f, 0.63f, 0.5f,
+                                            0.4f, 0.32f };
+    return d[clamp_to(s, SPEED_MIN, SPEED_MAX)];
+}
+
+/* Acceleration a as X's pointer control: past 4 pixels in one move, the
+   rest goes num/10 times as far (X's default is 2: a = 5). 0: none. */
+static inline int mouse_accel(int a)
+{
+    return 10 + 2 * clamp_to(a, ACCEL_MIN, ACCEL_MAX);
 }
 
 #endif

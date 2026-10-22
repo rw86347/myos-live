@@ -30,6 +30,15 @@
  * the root property _MYOS_POINTER (Settings > Mouse & Keyboard), and from
  * here to GTK (Gtk/CursorThemeSize) and every other X program (Xcursor.size).
  *
+ * And the pointer's speed and acceleration (mouse.conf's speed= and accel=,
+ * the root property _MYOS_MOUSE = speed * 16 + accel): the speed is each
+ * pointer device's "Device Accel Constant Deceleration" (an XInput2 device
+ * property, as `xinput set-prop` sets it), the acceleration X's pointer
+ * control (as `xset m` sets it). A mouse plugged in later gets the
+ * acceleration but the normal speed until the next change or login.
+ * Two-finger scrolling (mouse.conf's scroll=) is the kernel's: told here at
+ * login, and by Settings when it changes.
+ *
  * Cost: one sleeping process, ~1 MiB. Nothing runs until the scale changes.
  */
 #include <X11/Xatom.h>
@@ -45,7 +54,45 @@
 
 static Display *dpy;
 static Window root, win;
-static Atom a_settings, a_scale, a_auto, a_pointer;
+static Atom a_settings, a_scale, a_auto, a_pointer, a_mouse;
+
+/* libXi's XInput2 calls (the live disk has the library, not its headers;
+   these are XInput2.h's declarations, a stable ABI). */
+typedef struct {
+    int deviceid;
+    char *name;
+    int use;
+    int attachment;
+    Bool enabled;
+    int num_classes;
+    void **classes;
+} XIDeviceInfo;
+#define XIAllDevices   0
+#define XISlavePointer 3
+extern Status XIQueryVersion(Display *, int *, int *);
+extern XIDeviceInfo *XIQueryDevice(Display *, int, int *);
+extern void XIFreeDeviceInfo(XIDeviceInfo *);
+extern void XIChangeProperty(Display *, int, Atom, Atom, int, int, unsigned char *, int);
+
+/* Speed and acceleration, Settings > Mouse & Keyboard (scale.h). */
+static void apply_mouse(int speed, int accel)
+{
+    int major = 2, minor = 0, n = 0;
+    XChangePointerControl(dpy, True, True, mouse_accel(accel), 10, accel ? 4 : 0);
+    if (XIQueryVersion(dpy, &major, &minor) != Success)
+        return;                         /* no XInput2: the acceleration only */
+    Atom prop = XInternAtom(dpy, "Device Accel Constant Deceleration", True);
+    Atom flt = XInternAtom(dpy, "FLOAT", False);
+    XIDeviceInfo *d = prop ? XIQueryDevice(dpy, XIAllDevices, &n) : NULL;
+    float v = mouse_deceleration(speed);
+    for (int i = 0; i < n; i++)
+        if (d[i].use == XISlavePointer)
+            XIChangeProperty(dpy, d[i].deviceid, prop, flt, 32, PropModeReplace,
+                             (unsigned char *)&v, 1);
+    if (d)
+        XIFreeDeviceInfo(d);
+    XSync(dpy, False);
+}
 static uint32_t serial;
 
 static void set_cardinal(Atom a, long v)
@@ -118,7 +165,7 @@ static void icewm_theme(int scale)
     if (!home)
         return;
     int s = (scale + 12) / 25 * 25;
-    s = s < 100 ? 100 : s > 200 ? 200 : s;
+    s = s < SCALE_MIN ? SCALE_MIN : s > SCALE_MAX ? SCALE_MAX : s;
     snprintf(path, sizeof path, "%s/.icewm", home);
     mkdir(path, 0755);
     snprintf(path, sizeof path, "%s/.icewm/theme", home);
@@ -138,7 +185,8 @@ static void icewm_theme(int scale)
 static void apply(int scale, int pointer, int restart)
 {
     icewm_theme(scale);
-    int wsf = scale >= 200 ? 2 : 1;             /* GTK draws whole windows 2x */
+    int wsf = scale >= 200 ? 2 : 1;             /* GTK draws whole windows 2x (and past
+                                                   200 the fonts grow the rest: scale.h) */
     int dpi = 96 * scale / 100;
     int cursor = pointer_pixels(scale, pointer);
 
@@ -198,6 +246,7 @@ int main(void)
     a_scale = XInternAtom(dpy, "_MYOS_SCALE", False);
     a_auto = XInternAtom(dpy, "_MYOS_SCALE_AUTO", False);
     a_pointer = XInternAtom(dpy, "_MYOS_POINTER", False);
+    a_mouse = XInternAtom(dpy, "_MYOS_MOUSE", False);
     char selname[32];
     snprintf(selname, sizeof selname, "_XSETTINGS_S%d", scr);
     Atom sel = XInternAtom(dpy, selname, False);
@@ -218,11 +267,15 @@ int main(void)
 
     int chosen = scale_read_conf();
     int scale = chosen ? chosen : auto_scale(DisplayWidth(dpy, scr));
-    int pointer = pointer_read_conf();
+    struct mouse_conf mc = mouse_read_conf();
+    int pointer = mc.pointer, speed = mc.speed, accel = mc.accel;
     set_cardinal(a_auto, auto_scale(DisplayWidth(dpy, scr)));
     set_cardinal(a_scale, chosen);
     set_cardinal(a_pointer, pointer);
+    set_cardinal(a_mouse, speed * 16 + accel);
     apply(scale, pointer, 0);
+    apply_mouse(speed, accel);
+    touchpad_apply(mc.scroll);          /* this user's, not the last one's */
     XSelectInput(dpy, root, PropertyChangeMask);
     XSync(dpy, False);
 
@@ -247,6 +300,14 @@ int main(void)
             if (p != pointer) {
                 pointer = p;
                 apply(scale, pointer, 1);
+            }
+        } else if (e.type == PropertyNotify && e.xproperty.window == root && e.xproperty.atom == a_mouse) {
+            long v = get_cardinal(a_mouse, SPEED_NORMAL * 16 + ACCEL_NORMAL);
+            int s = clamp_to((int)(v >> 4), SPEED_MIN, SPEED_MAX), a = clamp_to((int)(v & 15), ACCEL_MIN, ACCEL_MAX);
+            if (s != speed || a != accel) {
+                speed = s;
+                accel = a;
+                apply_mouse(speed, accel);
             }
         } else if (e.type == SelectionClear) {
             return 0;               /* another manager took over */
