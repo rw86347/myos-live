@@ -1,10 +1,18 @@
-# MyOS's IBus defaults: English, and pinyin one Ctrl+Space away (IBus's own
-# Super+Space never reaches it: IceWM takes the Windows key for the Start
-# menu). Compiled by glib's trigger at first boot (/etc/myos/first-boot.sh).
+# MyOS's IBus defaults: English, and pinyin one Ctrl+Space away. The key is
+# myos-input's, not IBus's (no triggers here): IBus's own switcher is a
+# plain window unlike the desktop's, and myos-input shows the tray bubble.
+# (IBus's default Super+Space never reached it anyway: IceWM takes the
+# Windows key for the Start menu.) Compiled by glib's trigger at first boot
+# (/etc/myos/first-boot.sh).
 [org.freedesktop.ibus.general]
 preload-engines=['xkb:us::eng', 'libpinyin']
 engines-order=['xkb:us::eng', 'libpinyin']
 use-system-keyboard-layout=true
 
 [org.freedesktop.ibus.general.hotkey]
-triggers=['<Control>space']
+triggers=[]
+
+# The language in the tray (EN, or pinyin's 中) in white: IBus's own blue
+# can hardly be read on the tray's teal.
+[org.freedesktop.ibus.panel]
+xkb-icon-rgba='#ffffff'

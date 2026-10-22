@@ -8,7 +8,8 @@
  * The theme's menu has two columns under a header with your name, and Log
  * off / Turn off along the bottom, so this program draws it, and the Start
  * button too. It also draws the tray at the right of the bar: the mockup's
- * color, the divider, the network and volume icons, and the time. How it
+ * color, the divider, the network and volume icons, the battery (on a
+ * machine that has one: /sys/class/power_supply), and the time. How it
  * hooks in, without IceWM knowing:
  *
  *   - IceWM's Start button only holds the place (the theme gives it a
@@ -20,9 +21,16 @@
  *     own KeySysMenu and Win95Keys are switched off in its preferences).
  *
  * It also draws the theme's hot corner, the curl at the top right of the
- * desktop (see "the hot corner" below), and is the tray's notification
+ * desktop (see "the hot corner" below). A click there, or pushing the
+ * mouse into that corner over any window, starts myos-mission, which
+ * spreads this desktop's windows out. (Not F3, as on
+ * the Mac: a key grabbed here is taken from every program, and F3 is
+ * WritePerfect's Help.) Three fingers on the touchpad do the Mac's
+ * swipes: up starts myos-mission, left and right change desktop (see
+ * swiped()). It is also the tray's notification
  * area: the Wi-Fi icon (myos-wifi) docks there, where the mockup has its
- * network icon (see "the notification area" below).
+ * network icon, and other programs' icons (IBus's) open above the tray
+ * under the mouse (see "the notification area" below).
  *
  * Everything you see is drawn at build time by live/theme/make-live-theme.py
  * from the theme's design, into /usr/share/myos/menu/<scale>: the whole
@@ -64,6 +72,46 @@
 
 #include "xpic.h"
 #include "programs.h"
+#include "power_supply.h"
+
+/* Pushing into the hot corner uses XFixes 5's pointer barriers and XInput
+   2.3's barrier events. The sysroot has their libraries (GTK brings them)
+   and their protocol headers, but not the libraries' headers: what is used
+   here, as in Xfixes.h and XInput2.h. */
+#include <X11/extensions/XI2.h>
+#include <X11/extensions/xfixeswire.h>
+typedef XID PointerBarrier;
+Bool XFixesQueryExtension(Display *, int *, int *);
+Status XFixesQueryVersion(Display *, int *, int *);
+PointerBarrier XFixesCreatePointerBarrier(Display *, Window, int, int, int, int, int, int, int *);
+typedef struct {
+    int deviceid;
+    int mask_len;
+    unsigned char *mask;
+} XIEventMask;
+typedef struct {
+    int type;
+    unsigned long serial;
+    Bool send_event;
+    Display *display;
+    int extension;
+    int evtype;
+    Time time;
+    int deviceid;
+    int sourceid;
+    Window event;
+    Window root;
+    double root_x;
+    double root_y;
+    double dx;
+    double dy;
+    int dtime;
+    int flags;
+    PointerBarrier barrier;
+    unsigned int eventid;
+} XIBarrierEvent;
+Status XIQueryVersion(Display *, int *, int *);
+int XISelectEvents(Display *, Window, XIEventMask *, int);
 
 #define MAX_ITEMS 16
 
@@ -109,10 +157,38 @@ static int name_x, name_y, name_size, type_size = 13;
 static int clock_x, clock_y, clock_size;   /* where the time sits in the tray */
 static int slot_x, slot_y, slot_size;      /* where a docked icon sits in the tray */
 static int vol_x, vol_y, vol_size;         /* the speaker in the tray (0 size: none) */
+static int bat_x, bat_y, bat_size;         /* the battery in the tray (0 size: none) */
+static struct pic bat_pic, bolt_pic;       /* its outline; the bolt while charging */
+static struct rect bat_fill;               /* the inside, from the icon's top left */
+static struct power_supply bat;            /* as last read; bat.present 0: not drawn */
+static time_t bat_read;                    /* when */
 static Atom a_tray_sel, a_tray_opcode, a_xembed;   /* (the notification area) */
 static Window tray_owner;           /* holds the tray selection; dock requests come to it */
-static Window icon_win;             /* the docked icon (it stays ours if the bar restarts) */
-static void redraw_icon(void);
+#define MAX_DOCK 8
+struct docked {
+    Window w;                       /* the program's icon window */
+    Window in;                      /* where it sits now: tray_win or panel_inner (0 not yet) */
+    int x, y;
+    int rank;                       /* its order in the tray (rank_of) */
+};
+static struct docked docked[MAX_DOCK];     /* the Wi-Fi icon first, then as they came */
+static int ndocked;
+static Window panel_win;            /* the icons that don't fit, above the tray, under the mouse */
+static Window panel_inner;          /* the whole panel, inside panel_win (see "grows" below) */
+static Pixmap panel_bg;
+static int panel_rows;
+static int panel_h;                 /* how much of it shows now; 0 closed */
+static int anim_from, anim_to, anim_ms;    /* a grow or shrink under way (anim_ms 0: none) */
+static long anim_start;
+static Atom a_tray_top;             /* _MYOS_TRAY_TOP: where the tray's top is now (tray_follow.h) */
+static long tray_top_said = -1;
+static Window bar_window;           /* the taskbar's top-level window, the one the tray sits on */
+static void redraw_icons(void);
+static void lay_out_icons(void);
+static void undock(Window w);
+static void close_panel(void);
+static int tray_seam(void);
+static int panel_full(void);
 static time_t tray_minute;                 /* the minute currently drawn; 0 none */
 static struct rect run_box, run_ok, run_cancel, run_close;
 static char user[64];
@@ -304,6 +380,17 @@ static void read_conf(void)
             if (sscanf(rest, "%d %d %d", &x, &y, &sz) == 3)
                 vol_x = x, vol_y = y, vol_size = sz;
         }
+        else if (!strcmp(key, "battery")) {
+            int x, y, sz;
+            struct rect f;
+            char bolt[64];
+            if (sscanf(rest, "%d %d %d %63s %63s %d %d %d %d", &x, &y, &sz, name, bolt,
+                       &f.x, &f.y, &f.w, &f.h) == 9) {
+                load(&bat_pic, name);
+                load(&bolt_pic, bolt);
+                bat_x = x, bat_y = y, bat_size = sz, bat_fill = f;
+            }
+        }
         else if (!strcmp(key, "name") && nr >= 3)
             name_x = r.x, name_y = r.y, name_size = r.w;
         else if (!strcmp(key, "typesize") && nr >= 1)
@@ -415,11 +502,16 @@ static void next_event(XEvent *ev)
         return;
     if (ev->xdestroywindow.window == start_win)
         start_win = 0;
-    if (ev->xdestroywindow.window == icon_win)
-        icon_win = 0;               /* its program quit */
-    if (ev->xdestroywindow.window == tray_win || ev->xdestroywindow.window == tray_frame) {
+    undock(ev->xdestroywindow.window);     /* if it was an icon: its program quit */
+    if (ev->xdestroywindow.window == tray_win)
         tray_win = 0;
-        tray_frame = 0;
+    /* The tray is ours, on the root window, so it outlives the bar: it is
+       only hidden until the new bar turns up. */
+    if (ev->xdestroywindow.window == tray_frame || ev->xdestroywindow.window == bar_window) {
+        tray_frame = bar_window = 0;
+        if (tray_win)
+            XUnmapWindow(dpy, tray_win);
+        close_panel();
     }
 }
 
@@ -454,9 +546,10 @@ static void speaker_click(const XButtonEvent *b)
     char cmd[96];
     switch (b->button) {
     case Button1:
-        /* Its bottom centre above the icon: the icon's middle, the tray's top. */
+        /* Its bottom centre above the icon: the icon's middle, the tray's
+           top (the panel's, while the tray is grown). */
         snprintf(cmd, sizeof cmd, "exec myos-volume --at %d %d",
-                 b->x_root - b->x + vol_x + vol_size / 2, b->y_root - b->y);
+                 b->x_root - b->x + vol_x + vol_size / 2, b->y_root - b->y - panel_h);
         break;
     case Button2:
         snprintf(cmd, sizeof cmd, "exec myos-volume --mute");
@@ -471,6 +564,22 @@ static void speaker_click(const XButtonEvent *b)
         return;
     }
     launch(cmd);
+}
+
+/* The battery in the tray (myos-battery does the work): a click opens its
+   pop-up, the charge, the time left, health and the power-saving slider. */
+static int battery_click(const XButtonEvent *b)
+{
+    int pad = bat_size / 3, left = bat_x - pad;
+    if (vol_size && left < (vol_x + vol_size + bat_x) / 2)
+        left = (vol_x + vol_size + bat_x) / 2;      /* the speaker has the other half */
+    if (!bat.present || b->button != Button1 || b->x < left || b->x >= bat_x + bat_size + pad)
+        return 0;
+    char cmd[96];
+    snprintf(cmd, sizeof cmd, "exec myos-battery --at %d %d",
+             b->x_root - b->x + bat_x + bat_size / 2, b->y_root - b->y - panel_h);
+    launch(cmd);
+    return 1;
 }
 
 /* Run...: type a command, Enter (or OK) starts it. */
@@ -628,7 +737,37 @@ static void paint_tray(void)
 {
     if (!tray_pic.px)
         return;
-    Pixmap pm = pixmap_from(tray_pic.px, tray_pic.w, tray_pic.h);
+    Pixmap pm;
+    if (bat.present && bat_pic.px) {
+        /* The battery: its outline, and the inside filled to the charge
+           left, green on the charger, red when nearly empty; a lightning
+           bolt over it while charging. */
+        size_t n = (size_t)tray_pic.w * tray_pic.h;
+        uint32_t *px = malloc(n * 4);
+        if (!px)
+            die("out of memory");
+        memcpy(px, tray_pic.px, n * 4);
+        over(px, tray_pic.w, tray_pic.h, &bat_pic, bat_x, bat_y);
+        int pct = bat.percent < 0 ? 0 : bat.percent;
+        uint32_t color = bat.charging || bat.full || bat.on_ac ? 0x7ee07e :
+                         pct <= 10 ? 0xff5a4a : 0xffffff;
+        int w = (bat_fill.w * pct + 50) / 100;
+        if (pct > 0 && w < 1)
+            w = 1;                  /* something, until it is really empty */
+        for (int j = 0; j < bat_fill.h; j++) {
+            int y = bat_y + bat_fill.y + j;
+            for (int i = 0; i < w && y < tray_pic.h; i++) {
+                int x = bat_x + bat_fill.x + i;
+                if (x < tray_pic.w)
+                    px[(size_t)y * tray_pic.w + x] = color;
+            }
+        }
+        if (bat.charging)
+            over(px, tray_pic.w, tray_pic.h, &bolt_pic, bat_x, bat_y);
+        pm = pixmap_from(px, tray_pic.w, tray_pic.h);
+        free(px);
+    } else
+        pm = pixmap_from(tray_pic.px, tray_pic.w, tray_pic.h);
     if (f_clock) {
         char buf[32];
         time_t now = time(NULL);
@@ -644,7 +783,8 @@ static void paint_tray(void)
     if (tray_win) {
         XSetWindowBackgroundPixmap(dpy, tray_win, pm);
         XClearWindow(dpy, tray_win);
-        redraw_icon();
+        lay_out_icons();            /* the battery came or went: its place changes hands */
+        redraw_icons();
         XFlush(dpy);
     }
     if (tray_bg)
@@ -658,19 +798,279 @@ static void paint_tray(void)
    freedesktop.org's "system tray" protocol: the tray owns the selection
    _NET_SYSTEM_TRAY_S0 and says so; a program asks to dock with a message
    naming its icon's window, and the tray takes that window in as a child
-   (XEmbed) — ours goes where the mockup draws its network icon. One slot:
-   the Wi-Fi icon is the one program that docks. The icon's background is
-   ParentRelative (GTK's choice when the tray has no alpha visual), so it
-   shows our picture through, and is told to redraw when the picture does.
-   IceWM's own tray is off (TaskBarEnableSystemTray=0), or it would hold
-   the selection first. */
+   (XEmbed). The tray is four places wide: an icon where the mockup draws
+   its network icon (the Wi-Fi icon gets it, whenever it comes), the
+   speaker, the battery, the time. A machine without a battery lends its
+   place to a second icon. The rest (the language's, IBus: EN, 中) wait in
+   a panel that grows up out of the tray while the mouse is over it.
+
+   An icon's background is ParentRelative (GTK's choice when the tray has
+   no alpha visual), so it shows our picture through, and is told to
+   redraw when the picture does. IceWM's own tray is off
+   (TaskBarEnableSystemTray=0), or it would hold the selection first.
+
+   When this program goes (a new scale starts it over), the X server puts
+   each icon back on the root window (the save set), the program sees its
+   tray is gone and docks again with the next one. That is why the tray
+   is a window of the root and not of IceWM's bar: the server gives an
+   icon to the nearest window that isn't ours, and IceWM restarts with
+   the scale too, destroying its bar and everything in it. */
 #define DOCK_REQUEST 0              /* SYSTEM_TRAY_REQUEST_DOCK */
 #define XEMBED_EMBEDDED_NOTIFY 0
 
-static void redraw_icon(void)
+static void redraw_icons(void)
 {
-    if (icon_win)
-        XClearArea(dpy, icon_win, 0, 0, 0, 0, True);
+    for (int i = 0; i < ndocked; i++)
+        XClearArea(dpy, docked[i].w, 0, 0, 0, 0, True);
+}
+
+/* The places for icons in the tray itself, left to right. */
+static int tray_places(int *xs)
+{
+    int n = 0;
+    xs[n++] = slot_x;
+    if (bat_size && !bat.present)
+        xs[n++] = bat_x;
+    return n;
+}
+
+/* The panel's grid: the tray's step between icons, its height per row. */
+static int panel_step(void)
+{
+    return vol_x > slot_x ? vol_x - slot_x : slot_size + 2 * slot_y;
+}
+
+static int panel_cols(void)
+{
+    int c = (tray_pic.w - slot_x) / panel_step();
+    return c < 1 ? 1 : c;
+}
+
+/* The panel grows out of the tray: panel_win is the part that shows, its
+   bottom on the tray's top, and it gets taller; panel_inner, inside it,
+   is the whole panel with the icons, kept with its bottom on panel_win's
+   bottom, so the rows rise into view rather than unrolling from the top. */
+#define GROW_MS 500
+#define SHRINK_MS 250
+
+static long now_ms(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec * 1000L + t.tv_nsec / 1000000;
+}
+
+/* Tell the tray's pop-ups where its top is now, in screen pixels, so they
+   move with it (live/common/tray_follow.h). Only when it changed. */
+static void say_tray_top(int tray_y)
+{
+    long top = panel_h ? tray_y - panel_h + tray_seam() : tray_y;
+    if (top == tray_top_said)
+        return;
+    tray_top_said = top;
+    XChangeProperty(dpy, root, a_tray_top, XA_CARDINAL, 32, PropModeReplace,
+                    (unsigned char *)&top, 1);
+}
+
+static void set_panel_height(int h)
+{
+    if (!panel_win || h == panel_h)
+        return;
+    Window child;
+    int x, y;
+    XTranslateCoordinates(dpy, tray_win, root, 0, 0, &x, &y, &child);
+    if (h <= 0) {
+        XUnmapWindow(dpy, panel_win);
+        panel_h = 0;
+    } else {
+        XMoveResizeWindow(dpy, panel_win, x, y - h + tray_seam(), (unsigned)tray_pic.w, (unsigned)h);
+        XMoveWindow(dpy, panel_inner, 0, h - panel_full());
+        if (!panel_h)
+            XMapRaised(dpy, panel_win);
+        panel_h = h;
+    }
+    say_tray_top(y);
+    XFlush(dpy);
+}
+
+/* One frame: where the height should be by now, easing out (fast, then
+   slowing as it arrives). Called from the main loop, which wakes every
+   15 ms while a move is on (nap_ms). */
+static void step_panel(void)
+{
+    if (!anim_ms)
+        return;
+    long t = now_ms() - anim_start;
+    if (t >= anim_ms) {
+        anim_ms = 0;
+        set_panel_height(anim_to);
+        return;
+    }
+    long f = 1000 - (1000 - t * 1000 / anim_ms) * (1000 - t * 1000 / anim_ms) / 1000;
+    set_panel_height(anim_from + (int)((anim_to - anim_from) * f / 1000));
+}
+
+static void animate_panel(int to, int ms)
+{
+    if (to == (anim_ms ? anim_to : panel_h))
+        return;                     /* already there, or on its way */
+    anim_from = panel_h, anim_to = to;
+    anim_start = now_ms(), anim_ms = ms;
+    step_panel();
+}
+
+/* c moved toward white by n/256. */
+static uint32_t lighter(uint32_t c, int n)
+{
+    uint32_t r = c >> 16 & 0xff, g = c >> 8 & 0xff, b = c & 0xff;
+    r += (255 - r) * n / 256, g += (255 - g) * n / 256, b += (255 - b) * n / 256;
+    return r << 16 | g << 8 | b;
+}
+
+/* The tray picture's top rows are a light highlight line (1 px at 100%).
+   The grown panel covers them, so tray and panel read as one piece, and
+   puts the same line along its own top instead. */
+static int tray_seam(void)
+{
+    int s = tray_pic.h / 40;
+    return s < 1 ? 1 : s;
+}
+
+/* How tall the whole panel is: its rows, and the seam it covers. */
+static int panel_full(void)
+{
+    return panel_rows * tray_pic.h + tray_seam();
+}
+
+/* The panel's picture, `rows` high: the tray grown taller. Its colour is
+   the tray's own teal where it meets the tray (the column under the
+   clock, which is plain: the time is drawn at run time, just below the
+   highlight line), getting a little lighter toward the top; the divider
+   runs down the left as on the bar, and the highlight line closes the top. */
+static void size_panel(int rows)
+{
+    if (rows == panel_rows && panel_win)
+        return;
+    int seam = tray_seam();
+    int w = tray_pic.w, h = rows * tray_pic.h + seam;
+    uint32_t *px = malloc((size_t)w * h * 4);
+    if (!px)
+        die("out of memory");
+    int plain = clock_x > 0 && clock_x < tray_pic.w ? clock_x : tray_pic.w - 1;
+    const uint32_t *below = tray_pic.px + (size_t)(seam * 4) * tray_pic.w;
+    uint32_t base = below[plain] & 0xffffff;
+    uint32_t hi = tray_pic.px[plain] & 0xffffff, hi0 = tray_pic.px[0] & 0xffffff;
+    uint32_t edge = tray_pic.px[(size_t)(tray_pic.h / 2) * tray_pic.w] & 0xffffff;
+    for (int y = 0; y < h; y++) {
+        uint32_t *row = px + (size_t)y * w;
+        int top = y < seam;
+        uint32_t c = top ? hi : lighter(base, 40 * (h - y) / h);
+        row[0] = top ? hi0 : edge;
+        for (int x = 1; x < w; x++)
+            row[x] = c;
+    }
+    Pixmap pm = pixmap_from(px, w, h);
+    free(px);
+    if (!panel_win) {
+        XSetWindowAttributes a = { .override_redirect = True, .background_pixmap = None,
+                                   .event_mask = EnterWindowMask | LeaveWindowMask | ButtonPressMask };
+        panel_win = XCreateWindow(dpy, root, 0, 0, w, 1, 0, depth, InputOutput, vis,
+                                  CWOverrideRedirect | CWBackPixmap | CWEventMask, &a);
+        a.background_pixmap = pm;
+        panel_inner = XCreateWindow(dpy, panel_win, 0, 0, w, h, 0, depth, InputOutput, vis,
+                                    CWBackPixmap, &a);
+        XMapWindow(dpy, panel_inner);
+    } else {
+        XResizeWindow(dpy, panel_inner, w, h);
+        XSetWindowBackgroundPixmap(dpy, panel_inner, pm);
+        XClearWindow(dpy, panel_inner);
+    }
+    if (panel_bg)
+        XFreePixmap(dpy, panel_bg);
+    panel_bg = pm;
+    panel_rows = rows;
+    if (panel_h) {                  /* open, and an icon came or went: the new height at once */
+        panel_h = 0;
+        anim_ms = 0;
+        set_panel_height(panel_full());
+    }
+}
+
+/* Hand an icon to the tray or the panel, at (x, y) there. */
+static void embed(struct docked *d, Window in, int x, int y)
+{
+    if (d->in == in && d->x == x && d->y == y)
+        return;
+    XReparentWindow(dpy, d->w, in, x, y);
+    XResizeWindow(dpy, d->w, (unsigned)slot_size, (unsigned)slot_size);
+    XClientMessageEvent m = { .type = ClientMessage, .window = d->w, .format = 32,
+                              .message_type = a_xembed };
+    m.data.l[0] = CurrentTime;
+    m.data.l[1] = XEMBED_EMBEDDED_NOTIFY;
+    m.data.l[3] = (long)in;
+    XSendEvent(dpy, d->w, False, NoEventMask, (XEvent *)&m);
+    XMapRaised(dpy, d->w);
+    d->in = in, d->x = x, d->y = y;
+}
+
+/* Every icon to its place: the tray's places first, the rest in the panel,
+   its bottom row nearest the tray. Icons already in place aren't touched. */
+static void lay_out_icons(void)
+{
+    if (!tray_win)
+        return;
+    int xs[3], nplaces = tray_places(xs);
+    int extra = ndocked > nplaces ? ndocked - nplaces : 0;
+    int cols = panel_cols(), rows = (extra + cols - 1) / cols;
+    if (extra)
+        size_panel(rows);
+    else {
+        anim_ms = 0;
+        set_panel_height(0);
+    }
+    for (int i = 0; i < ndocked; i++) {
+        if (i < nplaces) {
+            embed(&docked[i], tray_win, xs[i], slot_y);
+            continue;
+        }
+        int k = i - nplaces;
+        embed(&docked[i], panel_inner, slot_x + k % cols * panel_step(),
+              (rows - 1 - k / cols) * tray_pic.h + slot_y);
+    }
+}
+
+/* Where the pointer is: 1 over the tray or the open panel above it. */
+static int pointer_in_tray(void)
+{
+    Window r, c;
+    int rx, ry, x, y;
+    unsigned mask;
+    if (!tray_win || !XQueryPointer(dpy, tray_win, &r, &c, &rx, &ry, &x, &y, &mask))
+        return 0;
+    return x >= 0 && x < tray_pic.w && y >= -panel_h && y < tray_pic.h;
+}
+
+/* The mouse came onto the tray: grow the panel out of it, if anything is in it. */
+static void show_panel(void)
+{
+    int xs[3];
+    if (!panel_win || ndocked <= tray_places(xs))
+        return;
+    animate_panel(panel_full(), GROW_MS);
+}
+
+/* The mouse left the tray: fold the panel away, unless it only went from one to the other. */
+static void hide_panel(void)
+{
+    if ((panel_h || anim_ms) && !pointer_in_tray())
+        animate_panel(0, SHRINK_MS);
+}
+
+/* At once, for a click and for the bar going away. */
+static void close_panel(void)
+{
+    anim_ms = 0;
+    set_panel_height(0);
 }
 
 /* Become the tray, unless something else already is. */
@@ -704,30 +1104,52 @@ static void own_tray(void)
     XSendEvent(dpy, root, False, StructureNotifyMask, (XEvent *)&m);
 }
 
-/* Put the icon in its slot, if the tray is up (else when it comes). */
-static void embed_icon(void)
+/* Which place an icon wants: the Wi-Fi icon first, the language (IBus's
+   panel, ibus-ui-gtk3) next, then the rest as they come. */
+static int rank_of(Window w)
 {
-    if (!icon_win || !tray_win)
-        return;
-    XReparentWindow(dpy, icon_win, tray_win, slot_x, slot_y);
-    XResizeWindow(dpy, icon_win, (unsigned)slot_size, (unsigned)slot_size);
-    XClientMessageEvent m = { .type = ClientMessage, .window = icon_win, .format = 32,
-                              .message_type = a_xembed };
-    m.data.l[0] = CurrentTime;
-    m.data.l[1] = XEMBED_EMBEDDED_NOTIFY;
-    m.data.l[3] = (long)tray_win;
-    XSendEvent(dpy, icon_win, False, NoEventMask, (XEvent *)&m);
-    XMapRaised(dpy, icon_win);
+    XClassHint ch = { 0 };
+    int rank = 2;
+    if (XGetClassHint(dpy, w, &ch) && ch.res_name) {
+        if (!strcmp(ch.res_name, "myos-wifi"))
+            rank = 0;
+        else if (!strncmp(ch.res_name, "ibus", 4))
+            rank = 1;
+    }
+    if (ch.res_name)
+        XFree(ch.res_name);
+    if (ch.res_class)
+        XFree(ch.res_class);
+    return rank;
 }
 
 static void dock(Window w)
 {
-    if (icon_win && icon_win != w)
-        return;                     /* the slot is taken */
-    icon_win = w;
+    for (int i = 0; i < ndocked; i++)
+        if (docked[i].w == w)
+            return;                 /* asked twice */
+    if (ndocked == MAX_DOCK)
+        return;
+    int rank = rank_of(w), at = ndocked;
+    while (at > 0 && docked[at - 1].rank > rank)
+        at--;
+    memmove(&docked[at + 1], &docked[at], (size_t)(ndocked - at) * sizeof docked[0]);
+    docked[at] = (struct docked){ .w = w, .rank = rank };
+    ndocked++;
     XSelectInput(dpy, w, StructureNotifyMask);
     XAddToSaveSet(dpy, w);          /* if we go, it goes back to the root, not away */
-    embed_icon();
+    lay_out_icons();
+}
+
+static void undock(Window w)
+{
+    for (int i = 0; i < ndocked; i++)
+        if (docked[i].w == w) {
+            memmove(&docked[i], &docked[i + 1], (size_t)(ndocked - i - 1) * sizeof docked[0]);
+            ndocked--;
+            lay_out_icons();
+            return;
+        }
 }
 
 /* The window that contains w, or 0. */
@@ -787,92 +1209,113 @@ static Window taskbar_window(void)
     return 0;
 }
 
-/* Put the tray in the bottom-right of the taskbar, above the clock.
-   Moving it only when it isn't already there: a move sends another
-   ConfigureNotify, and following that blindly would chase itself.
-   Raising only when something has covered it, for the same reason —
-   IceWM lifts its clock back to the top when it restacks the bar. */
+/* Put the tray over the bottom-right of the taskbar, and in the stacking
+   order just above the bar's top-level window: over the bar and its clock,
+   under anything that covers the bar (a full-screen window). Hidden while
+   the bar is. Moving and restacking only when it isn't already right: each
+   sends another ConfigureNotify, and following that blindly would chase
+   itself. */
 static void place_tray(void)
 {
     XWindowAttributes frame, self;
-    if (!tray_win || !tray_frame)
+    if (!tray_win || !tray_frame || !bar_window)
         return;
     if (!XGetWindowAttributes(dpy, tray_frame, &frame) || !XGetWindowAttributes(dpy, tray_win, &self))
         return;
-    int x = frame.width - tray_pic.w, y = frame.height - tray_pic.h;
-    if (x < 0)
-        x = 0;
-    if (y < 0)
-        y = 0;
+    if (frame.map_state != IsViewable) {
+        if (self.map_state != IsUnmapped)
+            XUnmapWindow(dpy, tray_win);
+        close_panel();
+        return;
+    }
+    Window child;
+    int fx, fy;
+    if (!XTranslateCoordinates(dpy, tray_frame, root, 0, 0, &fx, &fy, &child))
+        return;
+    int x = fx + frame.width - tray_pic.w, y = fy + frame.height - tray_pic.h;
     if (self.x != x || self.y != y)
         XMoveWindow(dpy, tray_win, x, y);
+    say_tray_top(y);
 
     Window r, parent, *kids = NULL;
     unsigned n = 0;
-    int covered = 1;
-    if (XQueryTree(dpy, tray_frame, &r, &parent, &kids, &n))
-        covered = n == 0 || kids[n - 1] != tray_win;
+    int bar = -1, me = -1;
+    if (XQueryTree(dpy, root, &r, &parent, &kids, &n))
+        for (unsigned i = 0; i < n; i++) {
+            if (kids[i] == bar_window)
+                bar = (int)i;
+            else if (kids[i] == tray_win)
+                me = (int)i;
+        }
     if (kids)
         XFree(kids);
-    if (covered)
-        XRaiseWindow(dpy, tray_win);
+    if (bar >= 0 && me != bar + 1) {
+        XWindowChanges c = { .sibling = bar_window, .stack_mode = Above };
+        XConfigureWindow(dpy, tray_win, CWSibling | CWStackMode, &c);
+    }
+    if (self.map_state == IsUnmapped)
+        XMapWindow(dpy, tray_win);
+    hide_panel();                   /* a leave we didn't see (a menu held the pointer) */
 }
 
-/* Once IceWM has made the taskbar. No Enter/Leave: the main loop treats
-   any enter that isn't the hot corner as the Start button. Clicks are
-   taken and ignored, so they don't fall through onto a task button. */
+/* Once IceWM has made the taskbar (again, after a restart). The tray is
+   override-redirect, so IceWM leaves it alone. Clicks are taken and
+   ignored, so they don't fall through onto a task button. */
 static void attach_tray(void)
 {
-    if (tray_win || !tray_pic.px)
+    if (tray_frame || !tray_pic.px)
         return;
-    tray_frame = taskbar_window();
-    if (!tray_frame)
+    Window frame = taskbar_window();
+    if (!frame)
         return;
-    paint_tray();
-    if (!tray_bg) {
-        tray_frame = 0;
-        return;
-    }
-    XWindowAttributes wa;
-    if (!XGetWindowAttributes(dpy, tray_frame, &wa)) {
-        tray_frame = 0;
-        return;
-    }
-    int x = wa.width - tray_pic.w, y = wa.height - tray_pic.h;
-    if (x < 0)
-        x = 0;
-    if (y < 0)
-        y = 0;
-    /* Override-redirect: the taskbar passes its children's map requests to
-       IceWM (substructure redirect), and IceWM ignores one for a window it
-       didn't make, so ours would never show. */
-    XSetWindowAttributes a = { .background_pixmap = tray_bg, .override_redirect = True,
-                               .event_mask = StructureNotifyMask | ButtonPressMask };
-    tray_win = XCreateWindow(dpy, tray_frame, x, y, tray_pic.w, tray_pic.h, 0, depth, InputOutput, vis,
-                             CWBackPixmap | CWOverrideRedirect | CWEventMask, &a);
+    Window top = frame;
+    for (Window p; (p = parent_of(top)) && p != root;)
+        top = p;
     if (!tray_win) {
-        tray_frame = 0;
-        return;
+        paint_tray();
+        if (!tray_bg)
+            return;
+        XSetWindowAttributes a = { .background_pixmap = tray_bg, .override_redirect = True,
+                                   .event_mask = StructureNotifyMask | ButtonPressMask |
+                                                 EnterWindowMask | LeaveWindowMask };
+        tray_win = XCreateWindow(dpy, root, 0, 0, tray_pic.w, tray_pic.h, 0, depth, InputOutput, vis,
+                                 CWBackPixmap | CWOverrideRedirect | CWEventMask, &a);
+        if (!tray_win)
+            return;
     }
-    XSelectInput(dpy, tray_frame, SubstructureNotifyMask | StructureNotifyMask);
-    XMapRaised(dpy, tray_win);
-    /* The create can fail after the id comes back (the bar went away).
-       Don't keep the id, or we would never try again. */
+    XSelectInput(dpy, frame, StructureNotifyMask);
+    if (top != frame)
+        XSelectInput(dpy, top, StructureNotifyMask);
+    /* The bar can go between finding it and here: then try again later. */
     XSync(dpy, False);
-    if (!XGetWindowAttributes(dpy, tray_win, &wa)) {
-        tray_win = 0;
-        tray_frame = 0;
+    XWindowAttributes wa;
+    if (!XGetWindowAttributes(dpy, frame, &wa) || !XGetWindowAttributes(dpy, top, &wa))
         return;
-    }
-    embed_icon();                   /* one that docked before the bar was there */
+    tray_frame = frame, bar_window = top;
+    place_tray();
+    lay_out_icons();                /* ones that docked before the bar was there */
 }
 
-/* Redraw when the minute changes. */
+/* Read the battery again every 10 seconds, as often as the kernel does.
+   1 if what the icon shows changed. */
+static int battery_changed(void)
+{
+    time_t now = time(NULL);
+    if (!bat_size || now - bat_read < 10)
+        return 0;
+    bat_read = now;
+    struct power_supply was = bat;
+    ps_read(PS_DIR, &bat);
+    return bat.present != was.present || bat.percent != was.percent ||
+           bat.charging != was.charging || bat.full != was.full || bat.on_ac != was.on_ac;
+}
+
+/* Redraw when the minute changes, or the battery does. */
 static void refresh_tray(void)
 {
-    if (!tray_win || !f_clock)
+    if (!tray_win)
         return;
-    if (time(NULL) / 60 == tray_minute)
+    if (!battery_changed() && (!f_clock || time(NULL) / 60 == tray_minute))
         return;
     paint_tray();
 }
@@ -881,10 +1324,13 @@ static void refresh_tray(void)
    is up, wake at least once a second: IceWM restacks its clock on the
    second, and the tray has to stay above it. Also wake for the new minute,
    which is when the time is drawn again. No tray picture means there is
-   nothing to wait for on that side. */
+   nothing to wait for on that side. While the panel grows or shrinks, the
+   next frame is 15 ms away. */
 static int nap_ms(void)
 {
-    if (!start_win || (tray_pic.px && !tray_win))
+    if (anim_ms)
+        return 15;
+    if (!start_win || (tray_pic.px && !tray_frame))
         return 250;
     struct timeval now;
     gettimeofday(&now, NULL);
@@ -923,8 +1369,107 @@ static int bar_top(void)
 /* The top-right corner of the desktop, curled over like a page. It lives in
    a small window of the "desktop" type, which IceWM keeps below every
    other window, so it is above the wallpaper and under windows, as the
-   theme says. (The window overview it is meant to open is not written yet;
-   see docs/ROADMAP.md, step 11b.) */
+   theme says. A click opens Mission Control for this desktop
+   (myos-mission). The desktops along the top are the Wayland session.
+
+   So a window there (a maximized one always is: IceWM hides its border and
+   its close button is in that corner, so the curl can't be on top) can't
+   hide it, pushing the mouse into the corner opens it too, as on the Mac.
+   The edge stops the pointer, so the push is felt with two pointer
+   barriers (XFixes), invisible lines along the top and right edges for the
+   curl's length: the X server tells us each time the pointer runs into one
+   and how far it would have gone. That costs nothing until the pointer is
+   pressed against the corner. Pressure is counted as GNOME's hot corner
+   does: at most PUSH_STEP per event, so a flick at the close button
+   counts for little, leaking away at PUSH_PX per PUSH_MS, and PUSH_PX
+   opens it, once per push: a push ends when the pointer leaves the
+   corner or rests there for PUSH_MS. A push while a button is held or a
+   menu has the pointer (the server says "grabbed") doesn't count. */
+
+#define PUSH_PX   100               /* pixels of push that open Mission Control */
+#define PUSH_MS   1000              /* ... if pushed within this long */
+#define PUSH_STEP 15                /* the most one event counts */
+
+static pid_t mission_pid;
+static int xi_opcode;               /* XInput's events, or 0: no pushing */
+static PointerBarrier push_right;   /* the vertical barrier; the other is the top */
+static double push;                 /* pixels pushed, leaking away */
+static Time push_time;
+static int pushed;                  /* opened: not again until the pointer leaves */
+
+static void open_mission(void)
+{
+    if (mission_pid > 0 && waitpid(mission_pid, NULL, WNOHANG) == 0)
+        return;                         /* already open */
+    mission_pid = fork();
+    if (mission_pid == 0) {
+        execl("/usr/bin/myos-mission", "myos-mission", (char *)NULL);
+        _exit(127);
+    }
+}
+
+/* The two barriers, c pixels each way from the corner. The right one lies
+   just off the screen (x = sw), so the pointer still reaches the last
+   column; the top one on row 0, which the pointer stays on. Each lets the
+   pointer through going away from its edge. A server without XFixes 5 or
+   XInput 2.3 has no barriers: then only the click works. */
+static void make_push(int c)
+{
+    int ev, err, maj = 5, min = 0;
+    if (!XFixesQueryExtension(dpy, &ev, &err) || !XFixesQueryVersion(dpy, &maj, &min) || maj < 5)
+        return;
+    int op;
+    maj = 2, min = 3;
+    if (!XQueryExtension(dpy, "XInputExtension", &op, &ev, &err) ||
+        XIQueryVersion(dpy, &maj, &min) != Success || maj * 100 + min < 203)
+        return;
+    unsigned char bits[XI_BarrierLeave / 8 + 1] = {0};
+    bits[XI_BarrierHit / 8] |= 1 << (XI_BarrierHit % 8);
+    bits[XI_BarrierLeave / 8] |= 1 << (XI_BarrierLeave % 8);
+    XIEventMask m = { XIAllMasterDevices, sizeof bits, bits };
+    XISelectEvents(dpy, root, &m, 1);
+    push_right = XFixesCreatePointerBarrier(dpy, root, sw, 0, sw, c, BarrierNegativeX, 0, NULL);
+    XFixesCreatePointerBarrier(dpy, root, sw - c, 0, sw, 0, BarrierPositiveY, 0, NULL);
+    xi_opcode = op;
+}
+
+/* An event from the barriers: count the push, or start over. */
+static void corner_push(XEvent *ev)
+{
+    XGenericEventCookie *ck = &ev->xcookie;
+    if (!xi_opcode || ck->extension != xi_opcode || !XGetEventData(dpy, ck))
+        return;
+    const XIBarrierEvent *b = ck->data;
+    if (ck->evtype == XI_BarrierLeave) {
+        push = 0;
+        pushed = 0;
+    } else if (ck->evtype == XI_BarrierHit && !(b->flags & XIBarrierDeviceIsGrabbed)) {
+        int right = b->barrier == push_right;
+        double across = right ? b->dx : -b->dy;     /* into the edge */
+        double along = right ? b->dy : b->dx;
+        if (along < 0)
+            along = -along;
+        if (across > 0 && along <= across) {        /* (not sliding along the edge) */
+            push -= (double)(uint32_t)(b->time - push_time) * PUSH_PX / PUSH_MS;
+            push_time = b->time;
+            /* All leaked away: a new push, even without a leave (the
+               server sends none after an absolute jump, a touch screen's). */
+            if (push <= 0) {
+                push = 0;
+                pushed = 0;
+            }
+            push += across < PUSH_STEP ? across : PUSH_STEP;
+            if (push >= PUSH_PX) {
+                push = PUSH_PX;     /* (so a second's rest always ends it) */
+                if (!pushed) {
+                    pushed = 1;
+                    open_mission();
+                }
+            }
+        }
+    }
+    XFreeEventData(dpy, ck);
+}
 
 /* Draw both curls over the wallpaper behind them. The wallpaper comes from
    the pixmap icewmbg publishes on the root window, not from the screen, so
@@ -969,7 +1514,7 @@ static void make_corner(void)
     if (!corner_pic[0].px)
         return;                     /* not in this theme */
     int c = corner_pic[0].w;
-    XSetWindowAttributes a = { .event_mask = EnterWindowMask | LeaveWindowMask };
+    XSetWindowAttributes a = { .event_mask = EnterWindowMask | LeaveWindowMask | ButtonPressMask };
     corner_win = XCreateWindow(dpy, root, sw - c, 0, c, c, 0, depth, InputOutput, vis,
                                CWEventMask, &a);
     Atom wtype = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE", False);
@@ -987,6 +1532,7 @@ static void make_corner(void)
     build_corner();
     show_corner(0);
     XMapWindow(dpy, corner_win);
+    make_push(c);
 }
 
 /* --- the menu, again ------------------------------------------------------------- */
@@ -1179,16 +1725,48 @@ static long root_cardinal(Atom a, long dflt)
     return v;
 }
 
+/* Three fingers sliding on the touchpad come as F14-F17: the kernel's
+   HID_SWIPE_* keys (include/hid.h); X's keycode is the Linux code + 8,
+   which holds whatever names the keymap gives them. As on a Mac, the
+   desktops follow the fingers: sliding left brings the one on the right,
+   with no wrapping round. Up opens Mission Control. Down closes it, which
+   myos-mission sees itself: it has the keyboard while it is open. */
+#define SWIPE_LEFT  (184 + 8)
+#define SWIPE_RIGHT (185 + 8)
+#define SWIPE_UP    (186 + 8)
+#define SWIPE_DOWN  (187 + 8)
+
+static void swiped(unsigned kc, Time t)
+{
+    static Atom a_cur, a_num;
+    if (kc == SWIPE_UP) {
+        open_mission();
+        return;
+    }
+    if (kc != SWIPE_LEFT && kc != SWIPE_RIGHT)
+        return;
+    if (!a_cur) {
+        a_cur = XInternAtom(dpy, "_NET_CURRENT_DESKTOP", False);
+        a_num = XInternAtom(dpy, "_NET_NUMBER_OF_DESKTOPS", False);
+    }
+    long cur = root_cardinal(a_cur, -1), to = cur + (kc == SWIPE_LEFT ? 1 : -1);
+    if (cur < 0 || to < 0 || to >= root_cardinal(a_num, 0))
+        return;
+    XEvent e = { .xclient = { .type = ClientMessage, .window = root, .message_type = a_cur,
+                              .format = 32, .data.l = { to, (long)t } } };
+    XSendEvent(dpy, root, False, SubstructureNotifyMask | SubstructureRedirectMask, &e);
+}
+
 /* The desktop's scale, as myos-xsettings decided it: _MYOS_SCALE, or 0
    for "automatic", which is _MYOS_SCALE_AUTO. The theme has pictures for
-   100, 125 ... 200%, so it's rounded to the nearest of those. */
+   100, 125 ... 300%, so it's rounded to the nearest of those. */
 static int desktop_scale(void)
 {
     long s = root_cardinal(a_scale, 0);
     if (s <= 0)
         s = root_cardinal(a_scale_auto, 100);
     s = (s + 12) / 25 * 25;
-    return s < 100 ? 100 : s > 200 ? 200 : (int)s;
+    return s < 100 ? 100 : s > 300 ? 300 : (int)s;
 }
 
 int main(int argc, char **argv)
@@ -1209,11 +1787,16 @@ int main(int argc, char **argv)
 
     a_scale = XInternAtom(dpy, "_MYOS_SCALE", False);
     a_scale_auto = XInternAtom(dpy, "_MYOS_SCALE_AUTO", False);
+    a_tray_top = XInternAtom(dpy, "_MYOS_TRAY_TOP", False);
     XSelectInput(dpy, root, PropertyChangeMask);    /* the scale, the wallpaper */
     scale = desktop_scale();
     snprintf(dir, sizeof dir, "/usr/share/myos/menu/%d/", scale);
 
     read_conf();
+    if (bat_size) {
+        ps_read(PS_DIR, &bat);
+        bat_read = time(NULL);
+    }
     read_user();
     char spec[96];
     snprintf(spec, sizeof spec, "Trebuchet MS,DejaVu Sans:bold:pixelsize=%d", name_size);
@@ -1232,20 +1815,23 @@ int main(int argc, char **argv)
     grab_key(XK_Escape, ControlMask);
     grab_key(XK_Super_L, 0);
     grab_key(XK_Super_R, 0);
+    for (int kc = SWIPE_LEFT; kc <= SWIPE_DOWN; kc++)    /* (no program sees them) */
+        XGrabKey(dpy, kc, AnyModifier, root, True, GrabModeAsync, GrabModeAsync);
     make_corner();
     own_tray();
 
     int fd = ConnectionNumber(dpy);
     for (;;) {
+        step_panel();
         /* Until IceWM's taskbar exists (it may still be starting, or
            restarting), look for it four times a second. Once the tray is
            up, keep it at the right end and above the clock. */
         if (!XPending(dpy)) {
             if (!start_win)
                 attach_start();
-            if (!tray_win)
+            if (!tray_frame)
                 attach_tray();
-            else {
+            else if (!anim_ms) {    /* (not every frame of the panel's move) */
                 place_tray();
                 refresh_tray();
             }
@@ -1265,17 +1851,23 @@ int main(int argc, char **argv)
         next_event(&ev);
         switch (ev.type) {
         case ButtonPress:
-            if (ev.xbutton.window == start_win && ev.xbutton.button == Button1)
+            if (ev.xbutton.window == corner_win && ev.xbutton.button == Button1)
+                open_mission();
+            else if (ev.xbutton.window == start_win && ev.xbutton.button == Button1)
                 open_menu();
-            else if (ev.xbutton.window == tray_win && vol_size)
+            else if (ev.xbutton.window == tray_win && !battery_click(&ev.xbutton) && vol_size)
                 speaker_click(&ev.xbutton);
             break;
         case MapNotify:
         case ConfigureNotify:
         case ReparentNotify:
-            /* IceWM restacks the bar; stay above its flat clock. */
-            if (tray_win && tray_frame && ev.xany.window == tray_frame)
+            /* IceWM moves or restacks the bar; stay on it. */
+            if (tray_win && tray_frame && (ev.xany.window == tray_frame || ev.xany.window == bar_window))
                 place_tray();
+            break;
+        case UnmapNotify:
+            if (tray_win && tray_frame && (ev.xany.window == tray_frame || ev.xany.window == bar_window))
+                place_tray();       /* the bar hid: so does the tray */
             break;
         case PropertyNotify:
             /* A new scale: every picture and size changes, so start over
@@ -1295,6 +1887,13 @@ int main(int argc, char **argv)
         case EnterNotify: {
             if (corner_win && ev.xcrossing.window == corner_win) {
                 show_corner(1);
+                break;
+            }
+            if (tray_win && (ev.xcrossing.window == tray_win || ev.xcrossing.window == panel_win)) {
+                /* Only when the mouse moved here: a pop-up taking the
+                   pointer and letting it go is an enter too. */
+                if (ev.xcrossing.mode == NotifyNormal)
+                    show_panel();
                 break;
             }
             show_start(START_HOVER);
@@ -1317,12 +1916,17 @@ int main(int argc, char **argv)
         case LeaveNotify:
             if (corner_win && ev.xcrossing.window == corner_win)
                 show_corner(0);
-            else
+            else if (tray_win && (ev.xcrossing.window == tray_win || ev.xcrossing.window == panel_win)) {
+                if (ev.xcrossing.detail != NotifyInferior)     /* not just onto an icon */
+                    hide_panel();
+            } else
                 show_start(START_NORMAL);
             break;
         case KeyPress:
             if (opens_menu(&ev.xkey))
                 open_menu();
+            else
+                swiped(ev.xkey.keycode, ev.xkey.time);
             break;
         case ClientMessage:
             if (ev.xclient.window == tray_owner && ev.xclient.message_type == a_tray_opcode &&
@@ -1332,6 +1936,9 @@ int main(int argc, char **argv)
         case SelectionClear:
             if (ev.xselectionclear.selection == a_tray_sel)
                 tray_owner = 0;     /* another tray took over */
+            break;
+        case GenericEvent:
+            corner_push(&ev);
             break;
         }
     }

@@ -1,15 +1,16 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /* Copyright (c) 2026 Rodger Wilson */
 /*
- * myos-wifi — the Wi-Fi icon in the taskbar's tray, as on Windows.
+ * myos-wifi — the Wi-Fi icon in the taskbar's tray.
  *
  * The icon shows the link: dark bars for the signal when connected (1 to
  * 4), grey bars with a yellow star when not but networks are around, grey
- * bars and a red cross when there is no Wi-Fi to talk to. Click it and the
- * networks nearby drop up from the tray: name, a padlock if it needs a
- * password, signal bars, the connected one first with Disconnect. Click a
- * network, then Connect; one that needs a password asks for it ("Enter the
- * network security key") and says so if it was wrong.
+ * bars and a red cross when there is no Wi-Fi to talk to. Click it and a
+ * menu drops up from the tray, the same bubble as the battery card and the
+ * same arrangement as the Mac's Wi-Fi menu: a switch, Personal Hotspot when
+ * a phone is nearby, the known networks, Other Networks, and Wi-Fi Settings.
+ * Click a known network to join it. One that needs a password asks for it
+ * ("Enter the network security key") and says so if it was wrong.
  *
  * wpa_supplicant does the work (scans, joining, the WPA2 handshake, keys);
  * this program only asks it, through its control socket: Unix datagrams to
@@ -42,6 +43,7 @@
 #include <unistd.h>
 
 #include "scale.h"
+#include "menu_bubble.h"
 
 #define CTRL_DIR "/var/run/wpa_supplicant"
 #define REPLY_MAX 8192                  /* wpa_supplicant answers in up to 4 KiB */
@@ -193,6 +195,7 @@ struct net {
     char shown[3 * 32 + 1];             /* the name to show (UTF-8) */
     int level;                          /* dBm */
     enum sec sec;
+    int saved;                          /* wpa_supplicant already has a key for it */
 };
 
 static struct net nets[NETS_MAX];
@@ -230,6 +233,8 @@ static enum sec sec_of(const char *flags)
     return SEC_OPEN;
 }
 
+static void mark_saved(void);
+
 /* SCAN_RESULTS: "bssid / frequency / signal level / flags / ssid", then
    one access point per line, tab-separated. */
 static void read_scan(void)
@@ -266,6 +271,7 @@ static void read_scan(void)
             shown_name(ssid, len, nets[k].shown, sizeof nets[k].shown);
             nets[k].level = level;
             nets[k].sec = sec_of(f[3]);
+            nets[k].saved = 0;
         } else if (level > nets[k].level) {
             nets[k].level = level;
         }
@@ -279,6 +285,7 @@ static void read_scan(void)
             nets[j] = nets[j - 1];
             nets[j - 1] = t;
         }
+    mark_saved();
 }
 
 /* STATUS: the state, and the network's name; the signal from SIGNAL_POLL. */
@@ -338,6 +345,34 @@ static int known_id(const unsigned char *ssid, size_t len)
     return -1;
 }
 
+/* Which of the networks nearby are already saved. One LIST_NETWORKS. */
+static void mark_saved(void)
+{
+    static char r[REPLY_MAX];
+    for (int i = 0; i < n_nets; i++)
+        nets[i].saved = 0;
+    if (ctrl_cmd("LIST_NETWORKS", r, sizeof r) <= 0)
+        return;
+    char *save, *line = strtok_r(r, "\n", &save);
+    while ((line = strtok_r(NULL, "\n", &save))) {
+        char *tab = strchr(line, '\t');
+        if (!tab)
+            continue;
+        char *end = strchr(tab + 1, '\t');
+        unsigned char s[32];
+        size_t n = decode_ssid(tab + 1, end ? (size_t)(end - tab - 1) : strlen(tab + 1), s);
+        for (int i = 0; i < n_nets; i++)
+            if (nets[i].ssid_len == n && !memcmp(nets[i].ssid, s, n))
+                nets[i].saved = 1;
+    }
+}
+
+/* A phone sharing its connection. The Mac lists those on their own. */
+static int is_hotspot(const struct net *n)
+{
+    return strstr(n->shown, "iPhone") || strstr(n->shown, "iPad") || strstr(n->shown, "Hotspot");
+}
+
 /* --- drawing ----------------------------------------------------------------------------- */
 
 /* Four rising bars in a size x size square, `lit` of them solid. On the
@@ -353,17 +388,6 @@ static void draw_bars(cairo_t *cr, double x, double y, double size, int lit, int
         cairo_set_source_rgba(cr, c, c, c, i < lit ? 1.0 : on_dark ? 0.35 : 0.3);
         cairo_fill(cr);
     }
-}
-
-/* A small padlock in the corner of a network's bars. */
-static void draw_lock(cairo_t *cr, double x, double y, double s)
-{
-    cairo_set_source_rgb(cr, 0.85, 0.65, 0.13);
-    cairo_set_line_width(cr, s / 7);
-    cairo_arc(cr, x + s / 2, y + s * 0.42, s * 0.24, M_PI, 2 * M_PI);
-    cairo_stroke(cr);
-    cairo_rectangle(cr, x + s * 0.14, y + s * 0.42, s * 0.72, s * 0.52);
-    cairo_fill(cr);
 }
 
 static GtkStatusIcon *icon;
@@ -448,7 +472,9 @@ static void update_icon(void)
 
 /* --- the list of networks --------------------------------------------------------------- */
 
-static GtkWidget *popup, *list_box, *note;
+static GtkWidget *popup, *card, *body, *scroller, *radio_sw, *note;
+static int radio_on = 1, radio_busy, others_open;
+static int anchor_x, anchor_y;
 static unsigned char sel_ssid[32];      /* the network clicked on */
 static size_t sel_len;
 static int have_sel;
@@ -464,13 +490,60 @@ static int is_current(const struct net *n)
     return state >= ST_CONNECTING && n->ssid_len == cur_ssid_len && !memcmp(n->ssid, cur_ssid, cur_ssid_len);
 }
 
-static gboolean draw_net_icon(GtkWidget *w, cairo_t *cr, gpointer data)
+/* The Mac's fan: a dot and up to three arcs. Blue is the network we're on. */
+static gboolean draw_fan(GtkWidget *w, cairo_t *cr, gpointer unused)
 {
-    const struct net *n = data;
-    int s = gtk_widget_get_allocated_height(w);
-    draw_bars(cr, 0, s * 0.1, s * 0.8, bars_for(n->level), 0);
-    if (n->sec != SEC_OPEN)
-        draw_lock(cr, s * 0.55, s * 0.5, s * 0.45);
+    (void)unused;
+    int lit = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "lit"));
+    int blue = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "blue"));
+    double s = gtk_widget_get_allocated_width(w);
+    double cx = s * 0.5, cy = s * 0.82;
+    cairo_set_source_rgb(cr, blue ? 0.0 : 0.45, blue ? 0.48 : 0.45, blue ? 1.0 : 0.48);
+    cairo_arc(cr, cx, cy, s * 0.07, 0, 2 * G_PI);
+    cairo_fill(cr);
+    cairo_set_line_width(cr, s * 0.09);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    for (int i = 0; i < 3; i++) {
+        cairo_set_source_rgba(cr, blue ? 0.0 : 0.45, blue ? 0.48 : 0.45, blue ? 1.0 : 0.48,
+                              lit >= i + 2 ? 1.0 : 0.28);
+        cairo_new_sub_path(cr);
+        cairo_arc(cr, cx, cy, s * (0.24 + i * 0.2), G_PI * 1.18, G_PI * 1.82);
+        cairo_stroke(cr);
+    }
+    return TRUE;
+}
+
+/* A small grey padlock, as on the Mac's known networks. */
+static gboolean draw_menu_lock(GtkWidget *w, cairo_t *cr, gpointer unused)
+{
+    (void)unused;
+    double s = gtk_widget_get_allocated_width(w);
+    cairo_set_source_rgb(cr, 0.56, 0.56, 0.58);
+    cairo_set_line_width(cr, s * 0.1);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, s * 0.5, s * 0.4, s * 0.2, G_PI, 2 * G_PI);
+    cairo_stroke(cr);
+    cairo_rectangle(cr, s * 0.2, s * 0.42, s * 0.6, s * 0.46);
+    cairo_fill(cr);
+    return TRUE;
+}
+
+/* A phone, for a personal hotspot. */
+static gboolean draw_phone(GtkWidget *w, cairo_t *cr, gpointer unused)
+{
+    (void)unused;
+    double s = gtk_widget_get_allocated_height(w);
+    double x = s * 0.28, y = s * 0.06, rw = s * 0.44, rh = s * 0.88, r = s * 0.1;
+    cairo_set_source_rgb(cr, 0.25, 0.25, 0.28);
+    cairo_set_line_width(cr, 1.3);
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, x + rw - r, y + r, r, -G_PI / 2, 0);
+    cairo_arc(cr, x + rw - r, y + rh - r, r, 0, G_PI / 2);
+    cairo_arc(cr, x + r, y + rh - r, r, G_PI / 2, G_PI);
+    cairo_arc(cr, x + r, y + r, r, G_PI, 3 * G_PI / 2);
+    cairo_close_path(cr);
+    cairo_stroke(cr);
     return TRUE;
 }
 
@@ -577,20 +650,50 @@ static void on_disconnect(GtkButton *b, gpointer data)
     rebuild();
 }
 
-static void on_row(GtkListBox *box, GtkListBoxRow *row, gpointer data)
+/* Click a network: a saved one joins at once. A new locked one asks for
+   the key. The one we're already on is left alone (the switch disconnects). */
+static gboolean on_net_press(GtkWidget *w, GdkEventButton *e, gpointer data)
 {
-    (void)box;
-    (void)data;
-    int i = gtk_list_box_row_get_index(row);
-    if (i < 0 || i >= n_nets || (have_sel && nets[i].ssid_len == sel_len &&
-                                 !memcmp(nets[i].ssid, sel_ssid, sel_len)))
-        return;
-    memcpy(sel_ssid, nets[i].ssid, nets[i].ssid_len);
-    sel_len = nets[i].ssid_len;
+    (void)w;
+    if (e->button != 1)
+        return FALSE;
+    int i = GPOINTER_TO_INT(data);
+    if (i < 0 || i >= n_nets)
+        return TRUE;
+    struct net *n = &nets[i];
+    if (asking && have_sel && n->ssid_len == sel_len && !memcmp(n->ssid, sel_ssid, sel_len))
+        return FALSE;                   /* the password field is in this row */
+    if (is_current(n))
+        return TRUE;
+    memcpy(sel_ssid, n->ssid, n->ssid_len);
+    sel_len = n->ssid_len;
     have_sel = 1;
-    asking = 0;
     error_text[0] = '\0';
+    if (n->sec == SEC_EAP || n->sec == SEC_WEP) {
+        asking = 0;
+        rebuild();
+        return TRUE;
+    }
+    if (n->sec != SEC_OPEN && !n->saved) {
+        asking = 1;
+        rebuild();
+        return TRUE;
+    }
+    asking = 0;
+    join(n, NULL);
+    update_icon();
     rebuild();
+    return TRUE;
+}
+
+static gboolean on_others(GtkWidget *w, GdkEventButton *e, gpointer data)
+{
+    (void)w, (void)data;
+    if (e->button != 1)
+        return FALSE;
+    others_open = !others_open;
+    rebuild();
+    return TRUE;
 }
 
 static GtkWidget *label(const char *text, const char *cls)
@@ -603,12 +706,6 @@ static GtkWidget *label(const char *text, const char *cls)
     return l;
 }
 
-static const char *sec_text(enum sec s)
-{
-    return s == SEC_OPEN ? "Open" : s == SEC_EAP ? "Secured (enterprise)" : s == SEC_WEP ? "Secured (WEP)"
-         : "Secured";
-}
-
 /* The eye in the password field: show or hide what was typed. */
 static void on_reveal(GtkEntry *e, GtkEntryIconPosition pos, GdkEvent *ev, gpointer data)
 {
@@ -618,102 +715,193 @@ static void on_reveal(GtkEntry *e, GtkEntryIconPosition pos, GdkEvent *ev, gpoin
     gtk_entry_set_visibility(e, !gtk_entry_get_visibility(e));
 }
 
-/* One row: bars and padlock, the name, its state; the clicked one opens
-   up with its buttons (and the password field when asked). */
-static GtkWidget *net_row(struct net *n)
+static GtkWidget *fan_icon(const struct net *n)
 {
-    int sel = have_sel && n->ssid_len == sel_len && !memcmp(n->ssid, sel_ssid, sel_len);
-    int cur = is_current(n);
-    GtkWidget *v = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(6));
-    gtk_container_set_border_width(GTK_CONTAINER(v), S(8));
-    GtkWidget *h = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(10));
     GtkWidget *da = gtk_drawing_area_new();
-    gtk_widget_set_size_request(da, S(24), S(24));
+    gtk_widget_set_size_request(da, S(18), S(18));
     gtk_widget_set_valign(da, GTK_ALIGN_CENTER);
-    g_signal_connect(da, "draw", G_CALLBACK(draw_net_icon), n);
-    gtk_box_pack_start(GTK_BOX(h), da, FALSE, FALSE, 0);
-    GtkWidget *t = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_box_pack_start(GTK_BOX(t), label(n->shown, "name"), FALSE, FALSE, 0);
-    char *st = cur ? g_strdup_printf("%s, %s", state == ST_CONNECTED ? "Connected" : "Connecting…",
-                                     n->sec == SEC_OPEN ? "open" : "secured")
-                   : g_strdup(sec_text(n->sec));
-    gtk_box_pack_start(GTK_BOX(t), label(st, "dim"), FALSE, FALSE, 0);
-    g_free(st);
-    gtk_box_pack_start(GTK_BOX(h), t, TRUE, TRUE, 0);
-    gtk_box_pack_start(GTK_BOX(v), h, FALSE, FALSE, 0);
-    if (!sel)
-        return v;
+    g_object_set_data(G_OBJECT(da), "lit", GINT_TO_POINTER(bars_for(n->level)));
+    g_object_set_data(G_OBJECT(da), "blue", GINT_TO_POINTER(is_current(n) ? 1 : 0));
+    g_signal_connect(da, "draw", G_CALLBACK(draw_fan), NULL);
+    return da;
+}
 
-    if (n->sec == SEC_EAP || n->sec == SEC_WEP) {
-        gtk_box_pack_start(GTK_BOX(v), label(n->sec == SEC_EAP ? "Enterprise networks aren't supported yet."
-                                                               : "WEP networks aren't supported.", "dim"),
-                           FALSE, FALSE, 0);
-        return v;
+static GtkWidget *click_row(GtkWidget *inner, GCallback press, gpointer data)
+{
+    GtkWidget *row = gtk_event_box_new();
+    gtk_style_context_add_class(gtk_widget_get_style_context(row), "menu-row");
+    gtk_widget_set_margin_start(row, S(6));
+    gtk_widget_set_margin_end(row, S(6));
+    gtk_container_add(GTK_CONTAINER(row), inner);
+    if (press)
+        g_signal_connect(row, "button-press-event", press, data);
+    return row;
+}
+
+/* One network: the fan, the name, a padlock if it wants a key. The one
+   that was clicked and needs a password opens a field under the name. */
+static GtkWidget *net_row(int i, int phone)
+{
+    struct net *n = &nets[i];
+    int sel = have_sel && n->ssid_len == sel_len && !memcmp(n->ssid, sel_ssid, sel_len);
+    GtkWidget *v = gtk_box_new(GTK_ORIENTATION_VERTICAL, S(2));
+    GtkWidget *h = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(8));
+    gtk_container_set_border_width(GTK_CONTAINER(h), S(3));
+    if (phone) {
+        GtkWidget *p = gtk_drawing_area_new();
+        gtk_widget_set_size_request(p, S(18), S(18));
+        gtk_widget_set_valign(p, GTK_ALIGN_CENTER);
+        g_signal_connect(p, "draw", G_CALLBACK(draw_phone), NULL);
+        gtk_box_pack_start(GTK_BOX(h), p, FALSE, FALSE, S(4));
+        gtk_box_pack_start(GTK_BOX(h), label(n->shown, "name"), TRUE, TRUE, 0);
+        gtk_box_pack_end(GTK_BOX(h), fan_icon(n), FALSE, FALSE, S(4));
+    } else {
+        gtk_box_pack_start(GTK_BOX(h), fan_icon(n), FALSE, FALSE, S(4));
+        GtkWidget *name = label(n->shown, "name");
+        gtk_widget_set_hexpand(name, TRUE);
+        gtk_box_pack_start(GTK_BOX(h), name, TRUE, TRUE, 0);
+        if (n->sec != SEC_OPEN) {
+            GtkWidget *lock = gtk_drawing_area_new();
+            gtk_widget_set_size_request(lock, S(14), S(14));
+            gtk_widget_set_valign(lock, GTK_ALIGN_CENTER);
+            g_signal_connect(lock, "draw", G_CALLBACK(draw_menu_lock), NULL);
+            gtk_box_pack_end(GTK_BOX(h), lock, FALSE, FALSE, S(6));
+        }
     }
-    if (asking) {
-        gtk_box_pack_start(GTK_BOX(v), label("Enter the network security key", NULL), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(v), h, FALSE, FALSE, 0);
+    if (sel && (n->sec == SEC_EAP || n->sec == SEC_WEP))
+        gtk_box_pack_start(GTK_BOX(v),
+                           label(n->sec == SEC_EAP ? "Enterprise networks aren't supported yet."
+                                                   : "WEP networks aren't supported.", "dim"),
+                           FALSE, FALSE, 0);
+    else if (sel && asking) {
+        GtkWidget *ask = label("Enter the network security key", "dim");
+        gtk_widget_set_margin_start(ask, S(8));
+        gtk_box_pack_start(GTK_BOX(v), ask, FALSE, FALSE, 0);
         pw_entry = gtk_entry_new();
         gtk_entry_set_visibility(GTK_ENTRY(pw_entry), FALSE);
         gtk_entry_set_input_purpose(GTK_ENTRY(pw_entry), GTK_INPUT_PURPOSE_PASSWORD);
         gtk_entry_set_icon_from_icon_name(GTK_ENTRY(pw_entry), GTK_ENTRY_ICON_SECONDARY, "view-reveal-symbolic");
+        gtk_widget_set_margin_start(pw_entry, S(8));
+        gtk_widget_set_margin_end(pw_entry, S(8));
         g_signal_connect(pw_entry, "icon-press", G_CALLBACK(on_reveal), NULL);
         g_signal_connect_swapped(pw_entry, "activate", G_CALLBACK(on_connect), NULL);
         gtk_box_pack_start(GTK_BOX(v), pw_entry, FALSE, FALSE, 0);
-    } else if (!cur) {
-        auto_check = gtk_check_button_new_with_label("Connect automatically");
-        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(auto_check), TRUE);
-        gtk_box_pack_start(GTK_BOX(v), auto_check, FALSE, FALSE, 0);
-    }
-    note = label(error_text, "error");
-    gtk_label_set_line_wrap(GTK_LABEL(note), TRUE);
-    gtk_box_pack_start(GTK_BOX(v), note, FALSE, FALSE, 0);
-    GtkWidget *bb = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(8));
-    GtkWidget *go = gtk_button_new_with_label(cur ? "Disconnect" : asking ? "Next" : "Connect");
-    go_button = go;
-    g_signal_connect(go, "clicked", G_CALLBACK(cur ? on_disconnect : on_connect), NULL);
-    gtk_box_pack_end(GTK_BOX(bb), go, FALSE, FALSE, 0);
-    if (asking) {
+        if (error_text[0]) {
+            note = label(error_text, "error");
+            gtk_label_set_line_wrap(GTK_LABEL(note), TRUE);
+            gtk_widget_set_margin_start(note, S(8));
+            gtk_box_pack_start(GTK_BOX(v), note, FALSE, FALSE, 0);
+        }
+        GtkWidget *bb = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(8));
+        gtk_widget_set_margin_end(bb, S(4));
+        gtk_widget_set_margin_bottom(bb, S(4));
+        GtkWidget *go = gtk_button_new_with_label("Join");
+        go_button = go;
+        g_signal_connect(go, "clicked", G_CALLBACK(on_connect), NULL);
         GtkWidget *c = gtk_button_new_with_label("Cancel");
         g_signal_connect(c, "clicked", G_CALLBACK(on_cancel), NULL);
+        gtk_box_pack_end(GTK_BOX(bb), go, FALSE, FALSE, 0);
         gtk_box_pack_end(GTK_BOX(bb), c, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(v), bb, FALSE, FALSE, 0);
     }
-    gtk_box_pack_start(GTK_BOX(v), bb, FALSE, FALSE, 0);
-    return v;
+    return click_row(v, G_CALLBACK(on_net_press), GINT_TO_POINTER(i));
+}
+
+static void add_section(const char *title)
+{
+    GtkWidget *l = label(title, "section");
+    gtk_widget_set_margin_start(l, S(14));
+    gtk_widget_set_margin_top(l, S(6));
+    gtk_widget_set_margin_bottom(l, S(1));
+    gtk_box_pack_start(GTK_BOX(body), l, FALSE, FALSE, 0);
+}
+
+static void add_nets(int (*want)(const struct net *), int phone)
+{
+    for (int pass = 0; pass < 2; pass++)
+        for (int i = 0; i < n_nets; i++)
+            if (want(&nets[i]) && is_current(&nets[i]) == (pass == 0))
+                gtk_box_pack_start(GTK_BOX(body), net_row(i, phone), FALSE, FALSE, 0);
+}
+
+static int want_hotspot(const struct net *n) { return is_hotspot(n); }
+static int want_known(const struct net *n) { return !is_hotspot(n) && (n->saved || is_current(n)); }
+static int want_other(const struct net *n) { return !is_hotspot(n) && !n->saved && !is_current(n); }
+
+static void sync_switch(void)
+{
+    if (!radio_sw)
+        return;
+    radio_busy++;
+    int available = state != ST_NONE;
+    gtk_widget_set_sensitive(radio_sw, available);
+    gtk_switch_set_active(GTK_SWITCH(radio_sw), available && radio_on);
+    radio_busy--;
 }
 
 static void rebuild(void)
 {
-    if (!popup || !gtk_widget_get_visible(popup))
+    if (!body)
         return;
-    GList *old = gtk_container_get_children(GTK_CONTAINER(list_box));
+    GList *old = gtk_container_get_children(GTK_CONTAINER(body));
     for (GList *l = old; l; l = l->next)
-        gtk_widget_destroy(l->data);
+        gtk_widget_destroy(GTK_WIDGET(l->data));
     g_list_free(old);
     pw_entry = auto_check = note = go_button = NULL;
-    /* The connected network first, then by signal (read_scan sorted them). */
-    for (int i = 0; i < n_nets; i++)
-        if (is_current(&nets[i]) && i) {
-            struct net t = nets[i];
-            memmove(nets + 1, nets, i * sizeof *nets);
-            nets[0] = t;
+    sync_switch();
+
+    int available = state != ST_NONE;
+    if (!available) {
+        GtkWidget *l = label("Wi-Fi isn't available.", "dim");
+        gtk_widget_set_margin_start(l, S(14));
+        gtk_widget_set_margin_top(l, S(4));
+        gtk_widget_set_margin_bottom(l, S(6));
+        gtk_box_pack_start(GTK_BOX(body), l, FALSE, FALSE, 0);
+    } else if (radio_on) {
+        int hot = 0, known = 0, other = 0;
+        for (int i = 0; i < n_nets; i++) {
+            if (want_hotspot(&nets[i])) hot++;
+            else if (want_known(&nets[i])) known++;
+            else other++;
         }
-    for (int i = 0; i < n_nets; i++)
-        gtk_list_box_insert(GTK_LIST_BOX(list_box), net_row(&nets[i]), -1);
-    if (!n_nets)
-        gtk_list_box_insert(GTK_LIST_BOX(list_box),
-                            label(state == ST_NONE ? "  Wi-Fi isn't available." : "  Looking for networks…",
-                                  "dim"), -1);
-    gtk_widget_show_all(list_box);
-    for (int i = 0; i < n_nets; i++)
-        if (have_sel && nets[i].ssid_len == sel_len && !memcmp(nets[i].ssid, sel_ssid, sel_len))
-            gtk_list_box_select_row(GTK_LIST_BOX(list_box),
-                                    gtk_list_box_get_row_at_index(GTK_LIST_BOX(list_box), i));
-    /* The keyboard where the next step is, as on Windows: the key field,
-       or the chosen network's Connect button (Enter connects). */
+        if (hot) {
+            add_section("Personal Hotspot");
+            add_nets(want_hotspot, 1);
+        }
+        if (known || (!hot && !other)) {
+            add_section("Known Networks");
+            if (known)
+                add_nets(want_known, 0);
+            else {
+                GtkWidget *l = label(n_nets ? "No known networks nearby." : "Looking for networks\u2026", "dim");
+                gtk_widget_set_margin_start(l, S(14));
+                gtk_widget_set_margin_bottom(l, S(4));
+                gtk_box_pack_start(GTK_BOX(body), l, FALSE, FALSE, 0);
+            }
+        }
+        if (other) {
+            GtkWidget *h = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+            gtk_container_set_border_width(GTK_CONTAINER(h), S(3));
+            GtkWidget *name = label("Other Networks", "name");
+            gtk_widget_set_hexpand(name, TRUE);
+            gtk_widget_set_margin_start(name, S(8));
+            gtk_box_pack_start(GTK_BOX(h), name, TRUE, TRUE, 0);
+            GtkWidget *chev = label(others_open ? "\u2039" : "\u203a", "name");
+            gtk_widget_set_margin_end(chev, S(8));
+            gtk_box_pack_end(GTK_BOX(h), chev, FALSE, FALSE, 0);
+            gtk_box_pack_start(GTK_BOX(body), click_row(h, G_CALLBACK(on_others), NULL), FALSE, FALSE, 0);
+            if (others_open)
+                add_nets(want_other, 0);
+        }
+    }
+    gtk_widget_show_all(body);
     if (pw_entry)
         gtk_widget_grab_focus(pw_entry);
     else if (go_button)
         gtk_widget_grab_focus(go_button);
+    if (popup && card && gtk_widget_get_visible(popup))
+        menu_place(popup, card, anchor_x, anchor_y);
 }
 
 /* --- talking to wpa_supplicant: connecting, events, the clock ---------------------------- */
@@ -878,106 +1066,199 @@ static GtkCssProvider *css;
 static void restyle(void)
 {
     char *c = g_strdup_printf(
-        ".wifi-popup { background: #ffffff; border: 1px solid #8a8a8a; }"
-        ".wifi-popup .title { font-weight: bold; padding: %dpx %dpx %dpx; }"
-        ".wifi-popup list { background: #ffffff; }"
-        ".wifi-popup row:hover { background: #e5f3ff; }"
-        ".wifi-popup row:selected { background: #cce8ff; color: #000000; }"
-        ".wifi-popup .dim { color: #5f5f5f; font-size: smaller; }"
-        ".wifi-popup .error { color: #c42b1c; }"
-        ".wifi-popup button { padding: %dpx %dpx; }",
-        S(10), S(12), S(6), S(3), S(14));
+        "window { background-color: transparent; }"
+        ".title { font-size: %dpx; font-weight: bold; color: #1d1d1f; }"
+        ".section { font-size: %dpx; color: #8e8e93; }"
+        ".name { font-size: %dpx; color: #1d1d1f; }"
+        ".dim { font-size: %dpx; color: #8e8e93; }"
+        ".error { font-size: %dpx; color: #c42b1c; }"
+        ".menu-row { background-color: transparent; border-radius: %dpx; }"
+        ".menu-row:hover { background-color: rgba(0,0,0,0.08); }"
+        "separator { background-color: rgba(0,0,0,0.12); min-height: 1px; margin: %dpx %dpx; }"
+        "scrolledwindow, viewport { background-color: #e8e8ed; }"
+        "button { padding: %dpx %dpx; border-radius: %dpx; }"
+        "switch { min-width: %dpx; min-height: %dpx; border-radius: %dpx;"
+        "  background-color: #e5e5ea; border: none; box-shadow: none; }"
+        "switch:checked { background-color: #007aff; }"
+        "switch slider { min-width: %dpx; min-height: %dpx; border-radius: %dpx;"
+        "  background-color: white; border: none; }",
+        S(13), S(11), S(13), S(12), S(12), S(6), S(6), S(10), S(2), S(10), S(6),
+        S(38), S(22), S(11), S(18), S(18), S(9));
     gtk_css_provider_load_from_data(css, c, -1, NULL);
     g_free(c);
 }
 
-static gboolean on_focus_out(GtkWidget *w, GdkEvent *e, gpointer data)
+static void popup_hide(void)
 {
-    (void)e;
-    (void)data;
-    gtk_widget_hide(w);
+    GdkSeat *seat = gdk_display_get_default_seat(gdk_display_get_default());
+    gdk_seat_ungrab(seat);
+    gtk_widget_hide(popup);
     asking = 0;
     error_text[0] = '\0';
+}
+
+static gboolean on_focus_out(GtkWidget *w, GdkEvent *e, gpointer data)
+{
+    (void)w, (void)e, (void)data;
+    popup_hide();
     return FALSE;
 }
 
 static gboolean on_key(GtkWidget *w, GdkEventKey *e, gpointer data)
 {
-    (void)data;
+    (void)w, (void)data;
     if (e->keyval == GDK_KEY_Escape) {
-        gtk_widget_hide(w);
+        popup_hide();
         return TRUE;
     }
     return FALSE;
+}
+
+/* A click outside the bubble ends it (we hold the pointer while it is open). */
+static gboolean on_button(GtkWidget *w, GdkEventButton *e, gpointer data)
+{
+    (void)data;
+    int ww = gtk_widget_get_allocated_width(w), wh = gtk_widget_get_allocated_height(w);
+    if (e->x < 0 || e->y < 0 || e->x >= ww || e->y >= wh) {
+        popup_hide();
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static gboolean on_radio(GtkSwitch *sw, gboolean state, gpointer data)
+{
+    (void)sw, (void)data;
+    if (radio_busy)
+        return FALSE;
+    radio_on = state;
+    if (!state)
+        on_disconnect(NULL, NULL);      /* also rebuilds */
+    else {
+        if (cmd_sock.fd >= 0)
+            ctrl_ok("SCAN");
+        rebuild();
+    }
+    return FALSE;
+}
+
+static gboolean on_wifi_settings(GtkWidget *w, GdkEventButton *e, gpointer data)
+{
+    (void)w, (void)data;
+    if (e->button != 1)
+        return FALSE;
+    g_spawn_command_line_async("myos-settings wifi", NULL);
+    popup_hide();
+    return TRUE;
+}
+
+static gboolean grab_it(gpointer unused)
+{
+    (void)unused;
+    GdkWindow *gw = gtk_widget_get_window(popup);
+    GdkSeat *seat = gdk_display_get_default_seat(gdk_display_get_default());
+    if (gw && gtk_widget_get_visible(popup))
+        gdk_seat_grab(seat, gw, GDK_SEAT_CAPABILITY_ALL, TRUE, NULL, NULL, NULL, NULL);
+    return G_SOURCE_REMOVE;
 }
 
 static void make_popup(void)
 {
     popup = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_decorated(GTK_WINDOW(popup), FALSE);
+    gtk_window_set_resizable(GTK_WINDOW(popup), FALSE);
     gtk_window_set_skip_taskbar_hint(GTK_WINDOW(popup), TRUE);
     gtk_window_set_skip_pager_hint(GTK_WINDOW(popup), TRUE);
     gtk_window_set_keep_above(GTK_WINDOW(popup), TRUE);
-    gtk_window_set_type_hint(GTK_WINDOW(popup), GDK_WINDOW_TYPE_HINT_UTILITY);
+    gtk_window_set_type_hint(GTK_WINDOW(popup), GDK_WINDOW_TYPE_HINT_POPUP_MENU);
     gtk_window_set_title(GTK_WINDOW(popup), "Wi-Fi");
-    gtk_style_context_add_class(gtk_widget_get_style_context(popup), "wifi-popup");
-    GtkWidget *v = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_box_pack_start(GTK_BOX(v), label("Wi-Fi", "title"), FALSE, FALSE, 0);
-    GtkWidget *sw = gtk_scrolled_window_new(NULL, NULL);
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-    list_box = gtk_list_box_new();
-    g_signal_connect(list_box, "row-activated", G_CALLBACK(on_row), NULL);
-    gtk_container_add(GTK_CONTAINER(sw), list_box);
-    gtk_box_pack_start(GTK_BOX(v), sw, TRUE, TRUE, 0);
-    gtk_container_add(GTK_CONTAINER(popup), v);
+    menu_bubble_prepare(popup);
+
+    card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_margin_top(card, S(8));
+    gtk_widget_set_margin_bottom(card, MENU_CARET);
+    gtk_widget_set_size_request(card, S(292), -1);
+
+    GtkWidget *head = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, S(8));
+    gtk_widget_set_margin_start(head, S(14));
+    gtk_widget_set_margin_end(head, S(12));
+    gtk_widget_set_margin_bottom(head, S(2));
+    gtk_box_pack_start(GTK_BOX(head), label("Wi-Fi", "title"), TRUE, TRUE, 0);
+    radio_sw = gtk_switch_new();
+    gtk_switch_set_active(GTK_SWITCH(radio_sw), TRUE);
+    gtk_widget_set_valign(radio_sw, GTK_ALIGN_CENTER);
+    g_signal_connect(radio_sw, "state-set", G_CALLBACK(on_radio), NULL);
+    gtk_box_pack_end(GTK_BOX(head), radio_sw, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(card), head, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(card), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL), FALSE, FALSE, 0);
+
+    scroller = gtk_scrolled_window_new(NULL, NULL);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_propagate_natural_height(GTK_SCROLLED_WINDOW(scroller), TRUE);
+    gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(scroller), S(360));
+    gtk_scrolled_window_set_shadow_type(GTK_SCROLLED_WINDOW(scroller), GTK_SHADOW_NONE);
+    body = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_container_add(GTK_CONTAINER(scroller), body);
+    gtk_box_pack_start(GTK_BOX(card), scroller, FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(card), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL), FALSE, FALSE, 0);
+    GtkWidget *settings = label("Wi-Fi Settings\u2026", "name");
+    gtk_widget_set_margin_start(settings, S(8));
+    gtk_widget_set_margin_top(settings, S(4));
+    gtk_widget_set_margin_bottom(settings, S(4));
+    GtkWidget *settings_row = click_row(settings, G_CALLBACK(on_wifi_settings), NULL);
+    gtk_widget_set_margin_bottom(settings_row, S(4));
+    gtk_box_pack_start(GTK_BOX(card), settings_row, FALSE, FALSE, 0);
+
+    gtk_container_add(GTK_CONTAINER(popup), card);
     g_signal_connect(popup, "focus-out-event", G_CALLBACK(on_focus_out), NULL);
     g_signal_connect(popup, "key-press-event", G_CALLBACK(on_key), NULL);
+    g_signal_connect(popup, "button-press-event", G_CALLBACK(on_button), NULL);
     g_signal_connect(popup, "delete-event", G_CALLBACK(gtk_widget_hide_on_delete), NULL);
 }
 
-/* Open the list above the tray (IceWM's taskbar is at the bottom), and
-   scan, so it fills in with what is around now. */
-static void show_popup(void)
+/* The point of the bubble sits on the Wi-Fi icon. */
+static void place_anchor(void)
 {
-    update_k();
-    restyle();
-    int w = S(320), h = S(420);
-    gtk_window_set_default_size(GTK_WINDOW(popup), w, h);
-    gtk_widget_set_size_request(popup, w, h);
+    GdkRectangle area;
     GdkScreen *scr;
-    GdkRectangle area, wa = { 0, 0, 0, 0 };
     GtkOrientation o;
-    int x = 0, y = 0;
+    if (icon && gtk_status_icon_get_geometry(icon, &scr, &area, &o)) {
+        anchor_x = area.x + area.width / 2;
+        anchor_y = area.y;
+        return;
+    }
+    GdkRectangle wa = { 0, 0, 1024, 768 };
     GdkMonitor *mon = gdk_display_get_primary_monitor(gdk_display_get_default());
     if (!mon)
         mon = gdk_display_get_monitor(gdk_display_get_default(), 0);
     if (mon)
         gdk_monitor_get_workarea(mon, &wa);
-    /* At the screen's right edge, just above the taskbar (Windows' place
-       for it); the icon says where the taskbar's top is. */
-    x = wa.x + wa.width - w;
-    y = wa.y + wa.height - h;
-    if (gtk_status_icon_get_geometry(icon, &scr, &area, &o) && area.y - h < y)
-        y = area.y - h;
-    if (x + w > wa.x + wa.width)
-        x = wa.x + wa.width - w;
-    if (x < wa.x)
-        x = wa.x;
-    if (y < wa.y)
-        y = wa.y;
-    if (y + h > wa.y + wa.height)
-        y = wa.y + wa.height - h;
-    gtk_window_move(GTK_WINDOW(popup), x, y);
+    anchor_x = wa.x + wa.width - S(28);
+    anchor_y = wa.y + wa.height;
+}
+
+/* Open the menu above the tray, and scan, so it fills in with what is around. */
+static void show_popup(void)
+{
+    update_k();
+    restyle();
+    gtk_widget_set_margin_top(card, S(8));
+    gtk_widget_set_size_request(card, S(292), -1);
+    gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(scroller), S(360));
     have_sel = asking = 0;
+    others_open = 0;
     error_text[0] = '\0';
     refresh();
-    if (cmd_sock.fd >= 0) {
+    if (cmd_sock.fd >= 0 && radio_on) {
         read_scan();
         ctrl_ok("SCAN");
     }
+    place_anchor();
     gtk_widget_show_all(popup);
     rebuild();
     gtk_window_present(GTK_WINDOW(popup));
+    g_timeout_add(50, grab_it, NULL);
 }
 
 static void on_activate(GtkStatusIcon *si, gpointer data)
@@ -985,7 +1266,7 @@ static void on_activate(GtkStatusIcon *si, gpointer data)
     (void)si;
     (void)data;
     if (gtk_widget_get_visible(popup))
-        gtk_widget_hide(popup);
+        popup_hide();
     else
         show_popup();
 }
@@ -1006,6 +1287,19 @@ static gboolean on_size(GtkStatusIcon *si, gint size, gpointer data)
     return TRUE;
 }
 
+/* GTK's own handler ends the program on any X error. The tray takes our
+   icon's window in as its child (XEmbed), and when the tray goes away
+   (myos-menu starts itself over for a new scale) what GTK still holds on
+   that window is gone; the icon docks again in the new tray. So an X
+   error is noted, never fatal. */
+static int x_error(Display *d, XErrorEvent *e)
+{
+    char msg[80];
+    XGetErrorText(d, e->error_code, msg, sizeof msg);
+    fprintf(stderr, "myos-wifi: X error: %s (request %d), ignored\n", msg, e->request_code);
+    return 0;
+}
+
 static gboolean on_quit(gpointer data)
 {
     (void)data;
@@ -1017,6 +1311,7 @@ int main(int argc, char **argv)
 {
     gtk_init(&argc, &argv);
     Display *d = GDK_DISPLAY_XDISPLAY(gdk_display_get_default());
+    XSetErrorHandler(x_error);
     a_scale = XInternAtom(d, "_MYOS_SCALE", False);
     a_scale_auto = XInternAtom(d, "_MYOS_SCALE_AUTO", False);
     update_k();
