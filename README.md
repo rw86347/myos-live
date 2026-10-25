@@ -7,6 +7,12 @@ overlay of configuration files, the lists of Alpine Linux packages the disk
 carries (pinned with their SHA-256s in `packages.lock`), the Golden Hour
 theme, and the tools that build and test the images.
 
+![The Golden Hour desktop](assets/themes/golden-hour/mockup.png)
+
+| Login | Battery | Settings |
+|:---:|:---:|:---:|
+| ![Login](assets/themes/golden-hour/login.png) | ![Battery](assets/themes/golden-hour/battery-popup.png) | ![Settings](assets/themes/golden-hour/settings-general.png) |
+
 Third-party programs (AbiWord, Chromium, GTK...) are not stored here: they
 are Alpine packages, fetched and checked at build time.
 
